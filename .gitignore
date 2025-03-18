@@ -1,0 +1,26 @@
+# ROS log files
+log/
+*.log
+*.bag
+.bag.active
+.bag.index
+
+# ROS build and devel files
+build/
+devel/
+install/
+.cmake
+*.swp
+*.swo
+
+# Python compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Gazebo files
+*.sdf
+*.world
+*.db
+gazebo_ros/
