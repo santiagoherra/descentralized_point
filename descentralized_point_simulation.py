@@ -60,7 +60,7 @@ class Descentralized_point():
         
         # Velocidades que devuelve el encoder.
         self.enc_sub =  rospy.Subscriber("%s/wheel_speed" % self.base_name,
-                                           WheelSpeed, queue_size = 50)
+                                           WheelSpeed, self.punto_descentralizado, queue_size = 50)
         
     def obtener_puntos(self):
         SKIP_ROWS = 1
@@ -225,6 +225,14 @@ class Descentralized_point():
 
         return None
 
+
+def main():
+    rospy.init_node("RoboclawTester", log_level=rospy.DEBUG)
+    prueba = Descentralized_point()
+    rospy.spin()
+
+if __name__ == "__main__":
+    main()
 
         
 
