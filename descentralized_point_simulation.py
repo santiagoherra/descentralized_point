@@ -201,9 +201,21 @@ class Descentralized_point():
         # Velocidades de referencia de las ruedas (lineales)
         v = B @ control_cinematico
 
-        # Obtener velocidades de las dos ruedas.
-        v_correc_izq = v[0]
-        v_correc_der = v[1]
+        # Obtener velocidades de las dos ruedas en PWM
+        v_izq_PWM = v[0] * 100
+        v_der_PWM = v[1] * 100
+
+        # Imprimir los mensajes
+        print(f"V_izq_PWM {v_izq_PWM}, V_der_PWM {v_der_PWM}\n"
+              f"current_x {self.current_x}, current_y {self.current_y}\n"
+              f"trajectory_x {self.trajectory_x}, trajectory_y {self.trajectory_y}\n")
+
+        # Se publican los mensajes
+        self.izq_pub.publish(Int8(v_izq_PWM))
+        self.der_pub.publish(Int8(-v_der_PWM))
+
+        return None
+
 
         
 
