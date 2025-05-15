@@ -73,7 +73,7 @@ class Descentralized_point():
 
         # Velocidad angular de la rueda izquierda y derecha
         w_der = encoders.phi[3]
-        w_izq = -encoders.phi[2]
+        w_izq = - encoders.phi[2]
 
         # Velocidad lineal de la rueda izquierda y derecha
         v_der =  (w_der) * R 
@@ -164,7 +164,16 @@ class Descentralized_point():
             except:
                 self.trajectory_y = sorted_waypoint[1, 0]
 
-    def punto_descentralizado(self):
+    def punto_descentralizado(self, encoders):
+
+        # Ejecutar todas los metodos para poder correr el algoritmo
+        # punto descentralizado.
+
+        waypoints = self.obtener_puntos()
+
+        self.modificar_posicion(encoders)
+
+        self.obtener_trayectoria(waypoints)
 
         # Obtener la derivada de la trajectoria actual
         self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_muestreo
