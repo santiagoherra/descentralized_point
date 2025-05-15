@@ -58,11 +58,11 @@ class Descentralized_point():
         self.der_pub = rospy.Publisher("%s/motor/SE_pwm" % self.base_name,
                                         Int8, queue_size=0)
         
-        # Posicion
+        # Velocidades que devuelve el encoder.
         self.enc_sub =  rospy.Subscriber("%s/wheel_speed" % self.base_name,
                                            WheelSpeed, queue_size = 50)
         
-    def obtener_trayectoria(self):
+    def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
         WAYPOINTS_FILE  = "./trayectoria_circulo.csv"
@@ -90,8 +90,73 @@ class Descentralized_point():
         #Preguntar esto
         self.current_x += ((v_der+v_izq)/2) * math.cos(self.current_theta) * tiempo_muestreo
         self.current_y += ((v_der+v_izq)/2) * math.sin(self.current_theta) * tiempo_muestreo
-    
+
+    def obtener_trayectoria(self, waypoints):
+        """
+        Encuentra el valor más cercano a 'target' en una lista ordenada 'arr'.
+        :param arr: Lista ordenada de números.
+        :param target: Valor objetivo.
+        :return: El valor más cercano.
+        """
+        # Ordenar el waypoint usando sort.
+        sorted_waypoint = waypoints.sort()
+
+        # Obtener el punto mas cercano a la trayectoria y el que le sigue
+        # para la coordenada x
+        left = 0
+        right = len(sorted_waypoint[0]) - 1
+
+        # Búsqueda binaria modificada.
+        while left <= right:
+            mid = left + (right - left) // 2
+
+            if sorted_waypoint[0, mid] == self.current_x:
+                return sorted_waypoint[0, mid + 1]
+
+            # Decidir si buscamos a la izquierda o derecha.
+            if self.current_x < sorted_waypoint[0, mid]:
+                right = mid - 1
+            else:
+                left = mid + 1
+
+        # Al final del while:
+        # right es el menor índice con arr[right] <= target.
+        # left es el mayor índice con arr[left] >= target.
+        # Ahora comparamos quién está más cerca. Si la distancia es igual para los dos
+        # se agarra el mayor valor.
+        if abs(sorted_waypoint[0, left] - self.current_x) <= abs(sorted_waypoint[0, right] - self.current_x):
+            # Cambia el valor de la trayectoria, es posible que tenga que cambiar el offset de la trajectoria
+            self.trajectory_x = sorted_waypoint[0, left + 1]
+        else:
+            self.trajectory_x = sorted_waypoint[0, right + 1]
+
+        # Ahora se realiza el mismo algoritmo para encontrar el menor valor en la 
+        # coordenada Y
+
+        left = 0
+        right = len(sorted_waypoint[1]) - 1
+
+        while left <= right:
+            mid = left + (right - left) // 2
+
+            if sorted_waypoint[1, mid] == self.current_y:
+                return sorted_waypoint[1, mid + 1]
+
+            if self.current_y < sorted_waypoint[1, mid]:
+                right = mid - 1
+            else:
+                left = mid + 1
+
+        if abs(sorted_waypoint[1, left] - self.current_y) <= abs(sorted_waypoint[1, right] - self.current_y):
+            self.trajectory_y = sorted_waypoint[1, left + 1]
+        else:
+            self.trajectory_y = sorted_waypoint[1, right + 1]
+
     def punto_descentralizado(self):
+
+        # Obtener la derivada de la trajectoria actual
+        self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_muestreo
+        self.trajectory_dy = (self.trajectory_y - self.current_y) / tiempo_muestreo
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([self.trajectory_dx,
