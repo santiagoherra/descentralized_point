@@ -126,9 +126,15 @@ class Descentralized_point():
         # se agarra el mayor valor.
         if abs(sorted_waypoint[0, left] - self.current_x) <= abs(sorted_waypoint[0, right] - self.current_x):
             # Cambia el valor de la trayectoria, es posible que tenga que cambiar el offset de la trajectoria
-            self.trajectory_x = sorted_waypoint[0, left + 1]
+            try: # Si se sale del indice vuelve al inicio de la trajectoria
+                self.trajectory_x = sorted_waypoint[0, left + 5]
+            except:
+                self.trajectory_x = sorted_waypoint[0, 0]
         else:
-            self.trajectory_x = sorted_waypoint[0, right + 1]
+            try:
+                self.trajectory_x = sorted_waypoint[0, right + 5]
+            except:
+                self.trajectory_x = sorted_waypoint[0, 0]
 
         # Ahora se realiza el mismo algoritmo para encontrar el menor valor en la 
         # coordenada Y
@@ -148,9 +154,15 @@ class Descentralized_point():
                 left = mid + 1
 
         if abs(sorted_waypoint[1, left] - self.current_y) <= abs(sorted_waypoint[1, right] - self.current_y):
-            self.trajectory_y = sorted_waypoint[1, left + 1]
+            try:
+                self.trajectory_y = sorted_waypoint[1, left + 5]
+            except:
+                self.trajectory_y = sorted_waypoint[1, 0]
         else:
-            self.trajectory_y = sorted_waypoint[1, right + 1]
+            try:
+                self.trajectory_y = sorted_waypoint[1, right + 5]
+            except:
+                self.trajectory_y = sorted_waypoint[1, 0]
 
     def punto_descentralizado(self):
 
