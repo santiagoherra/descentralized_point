@@ -1,51 +1,95 @@
 #! /usr/bin/python3
 
+##### Librerias y tipos de mensajes #####
+
 # Librerias generales
 import rospy
 import numpy as np
-import tf
 import math
 
-# Twist es el tipo de mensaje por el que se publica la velocidad del robot
-from geometry_msgs.msg import Twist
+# Int8 es el tipo de mensaje por el que se publica el valor de PWM de los motores del robot
+from std_msgs.msg import Int8
 
-# Odometry es el tipo de mensaje por el que se lee la posicion del robot
-from nav_msgs.msg import Odometry
+# WheelSpeed es el tipo de mensaje por el que se lee las velocidades angulares de las ruedas del robot
+from mecanumrob_common.msg import WheelSpeed
 
-### Parámetros ###
-wheel_base      = 0.276 / 2  # Mitad de la distancia entre las ruedas (b)
-R               = 0.0505     # Radio de la rueda
-lenght_g        = 0.0505     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 1          # Ganancia de la velocidad lineal
-KP_GAIN         = 1          # Ganancia proporcional de la posición
-tiempo_ejecucion = 0.022     # Tiempo de reiteracion
+### Parameters ###
 
-### Clase ###
-class DescentralizedPoint:
+wheel_base      = 0.276/2  # Mitad de la distancia entre las ruedas (b)
+R               = 0.0505   # Radio de la rueda del robot
+lenght_g        = 0.0505   # Distancia desde el punto medio del robot hacia el frente (g)
+KV_GAIN         = 1        # Ganancia de la velocidad lineal
+KP_GAIN         = 1        # Ganancia proporcional de la velocidad lineal
+tiempo_muestreo = 0.0022   # Tiempo de muestreo del robot
+odom_topic = "/odom" # Topico del mensaje de la posicion
+
+### Algoritmo ###
+
+class Descentralized_point():
+    """
+    Clase de Punto Descentralizado:
+
+    Esta clase se encarga de ejecutar el algoritmo de punto descentralizado
+    para un robot movil descentralizado.
+    """
+
     def __init__(self):
-        self.wheelbase = wheel_base
-        self.current_x = 0.0
-        self.current_y = 0.0
-        self.current_theta = 0.0
+        self.base_name = rospy.get_param("~BaseName", default ="")
 
-        self.trajectory_x = 0.0
-        self.trajectory_y = 0.0
+        # Odometria del robot movil
+        self.wheelbase     = wheel_base
+        self.current_x     = 0
+        self.current_y     = 0
+        self.current_theta = 0
 
-        self.trajectory_dx = 0.0
-        self.trajectory_dy = 0.0
+        # Coordenadas de trayectoria y su derivada
+        self.trajectory_x = 0
+        self.trajectory_y = 0
 
-        self.actuaction = Twist()
+        self.trajectory_dx = 0
+        self.trajectory_dy = 0
 
+        # Variables a publicar y suscribir
 
-        self.drive_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=100)
-        self.odom_sub = rospy.Subscriber("/odom", Odometry, self.punto_descentralizado, queue_size=100)
+        # Velocidades de las ruedas izquierda y derecha
+        self.izq_pub = rospy.Publisher("%s/motor/SW_pwm" % self.base_name,
+                                        Int8, queue_size=0)
 
+        self.der_pub = rospy.Publisher("%s/motor/SE_pwm" % self.base_name,
+                                        Int8, queue_size=0)
+        
+        # Velocidades que devuelve el encoder.
+        self.enc_sub =  rospy.Subscriber("%s/wheel_speed" % self.base_name,
+                                           WheelSpeed, self.punto_descentralizado, queue_size = 50)
+        
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
         WAYPOINTS_FILE  = "./trayectoria_circulo.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
+    
+    def modificar_posicion(self, encoders):
+
+        # Velocidad angular de la rueda izquierda y derecha
+        w_der = encoders.phi[3]
+        w_izq = - encoders.phi[2]
+
+        # Velocidad lineal de la rueda izquierda y derecha
+        v_der =  (w_der) * R 
+        v_izq =  (w_izq) * R
+
+        # Velocidad angular del robot a la mitad
+        omega = ((v_der-v_izq) / (self.wheelbase))
+
+        # Actualizando el angulo de orientacion del robot
+        self.current_theta += omega * tiempo_muestreo
+
+        # Actualizando la posicion del robot.
+
+        #Preguntar esto
+        self.current_x += ((v_der+v_izq)/2) * math.cos(self.current_theta) * tiempo_muestreo
+        self.current_y += ((v_der+v_izq)/2) * math.sin(self.current_theta) * tiempo_muestreo
 
     def obtener_trayectoria(self, waypoints):
         """
@@ -120,28 +164,22 @@ class DescentralizedPoint:
             except:
                 self.trajectory_y = sorted_waypoint[1, 0]
 
-    def punto_descentralizado(self, odom_msg):
+    def punto_descentralizado(self, encoders):
+
+        # Ejecutar todas los metodos para poder correr el algoritmo
+        # punto descentralizado.
 
         waypoints = self.obtener_puntos()
 
-        # Se guarda el Quaternio de orientacion en orientation_list
-        orientation_list = [odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y,
-                            odom_msg.pose.pose.orientation.z, odom_msg.pose.pose.orientation.w]
-        
-        # Se determina los tres angulos de orientacion
-        (roll, pitch, theta) = tf.transformations.euler_from_quaternion(orientation_list)
-
-        self.current_x = odom_msg.pose.pose.position.x
-        self.current_y = odom_msg.pose.pose.position.y
-        self.current_theta = theta
+        self.modificar_posicion(encoders)
 
         self.obtener_trayectoria(waypoints)
 
-        # Derivada de la trayectoria
-        self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_ejecucion
-        self.trajectory_dy = (self.trajectory_y - self.current_y) / tiempo_ejecucion
+        # Obtener la derivada de la trajectoria actual
+        self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_muestreo
+        self.trajectory_dy = (self.trajectory_y - self.current_y) / tiempo_muestreo
 
-                # Componente proporcional a la velocidad de referencia
+        # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([self.trajectory_dx,
                                             self.trajectory_dy])
 
@@ -172,24 +210,36 @@ class DescentralizedPoint:
         # Velocidades de referencia de las ruedas (lineales)
         v = B @ control_cinematico
 
-        self.actuaction.linear.x = v
+        # Obtener velocidades de las dos ruedas en PWM
+        v_izq_PWM = v[0] * 100
+        v_der_PWM = v[1] * 100
 
-        # Velocidad angular del robot a la mitad
-        omega = ((v[1] - v[0]) / (self.wheelbase))
+        # Imprimir los mensajes
+        print(f"V_izq_PWM {v_izq_PWM}, V_der_PWM {v_der_PWM}\n"
+              f"current_x {self.current_x}, current_y {self.current_y}\n"
+              f"trajectory_x {self.trajectory_x}, trajectory_y {self.trajectory_y}\n")
 
-        self.actuaction.angular.z = omega
+        # Se publican los mensajes
+        self.izq_pub.publish(Int8(v_izq_PWM))
+        self.der_pub.publish(Int8(-v_der_PWM))
 
-        # Se publica el mensaje y se imprime en terminal la posicion
-        self.drive_pub.publish(self.actuaction)
-        print("Current x: {}    Current y: {}".format(self.current_x, self.current_y))
+        return None
+
 
 def main():
-    rospy.init_node("descentralized_point_simulation")
-    DescentralizedPoint()
-    
-    print("\n descentralized point simulation working :)")
-
+    rospy.init_node("RoboclawTester", log_level=rospy.DEBUG)
+    prueba = Descentralized_point()
     rospy.spin()
 
 if __name__ == "__main__":
     main()
+
+        
+
+        
+
+
+
+
+        
+        
