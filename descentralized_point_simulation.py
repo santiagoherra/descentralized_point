@@ -3,10 +3,8 @@
 # Librerias generales
 import rospy
 import numpy as np
-import tf
 import math
-
-from pp_utils import get_current_waypoint
+import tf
 
 import pdb
 
@@ -23,6 +21,10 @@ lenght_g        = 0.0505     # Distancia desde el centro al frente del robot (g)
 KV_GAIN         = 0.05          # Ganancia de la velocidad lineal
 KP_GAIN         = 0.05          # Ganancia proporcional de la posición
 tiempo_ejecucion = 0.022     # Tiempo de reiteracion
+DISTANCIA_UMBRAL = 1.5  # Distancia a la que el robot esta fuera de rango
+OFFSET           = 10  # Offset que determina los puntos hacia adelante de la trayectoria
+                       # que depende de el cambio de distancia entre los puntos.
+CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
 
 drive_topic         = "/cmd_vel" 
 odom_topic         = "/odom" 
@@ -41,8 +43,9 @@ class DescentralizedPoint:
         self.trajectory_dx = 0.0
         self.trajectory_dy = 0.0
 
-        self.actuaction = Twist()
+        self.current_target_idx = 0
 
+        self.actuaction = Twist()
 
         self.drive_pub = rospy.Publisher(drive_topic, Twist, queue_size=100)
         self.odom_sub = rospy.Subscriber(odom_topic, Odometry, self.punto_descentralizado, queue_size=100)
@@ -55,33 +58,39 @@ class DescentralizedPoint:
         return waypoints
 
     def obtener_trayectoria(self, waypoints):
-        """
-        Encuentra el waypoint más cercano a la posición actual y selecciona el siguiente en la lista como trayectoria.
-        """
+        # Si no existe aún un índice de objetivo, inicializarlo al punto más cercano
+        if not hasattr(self, 'current_target_idx') or self.current_target_idx is None:
+            self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
+        
+        # Obtener el punto objetivo actual
+        punto_objetivo = waypoints[self.current_target_idx]
+        
+        # Calcular la distancia a ese punto
+        dx = punto_objetivo[0] - self.current_x
+        dy = punto_objetivo[1] - self.current_y
+        distancia = np.sqrt(dx**2 + dy**2)
+        
+        if distancia <= DISTANCIA_UMBRAL:
+            siguiente_idx = self.current_target_idx + OFFSET
+            if siguiente_idx < len(waypoints):
+                self.current_target_idx = siguiente_idx
+            else:
+                if CONTINUIDAD:
+                    self.current_target_idx = OFFSET  # reiniciar con salto desde inicio
+                else:
+                    self.current_target_idx = len(waypoints) - 1  # quedarse al final
 
-        # Posición actual
-        current_position = np.array([self.current_x, self.current_y])
 
-        # Inicializar variables para búsqueda lineal
-        min_dist = float('inf')
-        nearest_idx = 0
+        # Actualizar los valores de la trayectoria
+        self.trajectory_x = waypoints[self.current_target_idx][0]
+        self.trajectory_y = waypoints[self.current_target_idx][1]
+    
+    def encontrar_idx_mas_cercano(self, waypoints):
 
-        # Búsqueda lineal del punto más cercano
-        for i, point in enumerate(waypoints):
-            dist = np.linalg.norm(current_position - point)
-            if dist < min_dist:
-                min_dist = dist
-                nearest_idx = i
+        posicion_actual = np.array([self.current_x, self.current_y])
+        distancias = np.linalg.norm(waypoints - posicion_actual, axis=1)
 
-        # Offset: cuántos puntos adelante tomas como trayectoria
-        offset = 20
-        next_idx = (nearest_idx + offset) % len(waypoints)  # para hacer wraparound
-
-        # Guardar la trayectoria seleccionada
-        self.trajectory_x = waypoints[next_idx, 0]
-        self.trajectory_y = waypoints[next_idx, 1]
-
-        return None  # opcional, puede devolver (trajectory_x, trajectory_y) si prefieres
+        return np.argmin(distancias)
 
 
     def punto_descentralizado(self, odom_msg):
@@ -102,15 +111,10 @@ class DescentralizedPoint:
         self.obtener_trayectoria(waypoints)
 
         # Derivada de la trayectoria
-        #self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_ejecucion
-        #self.trajectory_dy = (self.trajectory_y - self.current_y) / tiempo_ejecucion
+        self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_ejecucion
+        self.trajectory_dy = (self.trajectory_y - self.current_y) / tiempo_ejecucion
 
-        pdb.set_trace()
-
-        self.trajectory_dx = 3
-        self.trajectory_dy = 3
-
-                # Componente proporcional a la velocidad de referencia
+        # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
                                             [self.trajectory_dy]])
 
@@ -141,8 +145,6 @@ class DescentralizedPoint:
 
         # Velocidades de referencia de las ruedas (lineales)
         v = B @ control_cinematico
-
-        #pdb.set_trace()
 
         # Obtener velocidades de las dos ruedas
         v_izq = v[0]
