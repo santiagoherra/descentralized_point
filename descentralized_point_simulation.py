@@ -17,11 +17,11 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 
 ### Parámetros ###
-wheel_base      = 0.276 / 2  # Mitad de la distancia entre las ruedas (b)
-R               = 0.0505     # Radio de la rueda
-lenght_g        = 0.0505     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 0.05          # Ganancia de la velocidad lineal
-KP_GAIN         = 0.05          # Ganancia proporcional de la posición
+wheel_base      = 0.577  # Mitad de la distancia entre las ruedas (b)
+R               = 0.511     # Radio de la rueda
+lenght_g        = 0.625     # Distancia desde el centro al frente del robot (g)
+KV_GAIN         = 10          # Ganancia de la velocidad lineal
+KP_GAIN         = 5          # Ganancia proporcional de la posición
 tiempo_ejecucion = 0.022     # Tiempo de reiteracion
 
 drive_topic         = "/cmd_vel" 
