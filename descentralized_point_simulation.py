@@ -22,7 +22,7 @@ KV_GAIN         = 10          # Ganancia de la velocidad lineal
 KP_GAIN         = 5          # Ganancia proporcional de la posición
 tiempo_ejecucion = 0.022     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 1.5  # Distancia a la que el robot esta fuera de rango
-OFFSET           = 10  # Offset que determina los puntos hacia adelante de la trayectoria
+OFFSET           = 25  # Offset que determina los puntos hacia adelante de la trayectoria
                        # que depende de el cambio de distancia entre los puntos.
 CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
 
@@ -58,9 +58,9 @@ class DescentralizedPoint:
         return waypoints
 
     def obtener_trayectoria(self, waypoints):
-        # Si no existe aún un índice de objetivo, inicializarlo al punto más cercano
-        if not hasattr(self, 'current_target_idx') or self.current_target_idx is None:
-            self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
+
+        # Encontrar el punto mas cercano a la posicion del robot
+        self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
         
         # Obtener el punto objetivo actual
         punto_objetivo = waypoints[self.current_target_idx]

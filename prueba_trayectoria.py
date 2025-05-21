@@ -4,7 +4,7 @@ import pdb
 current_target_idx = None
 
 DISTANCIA_UMBRAL = 15  # Distancia a la que el robot esta fuera de rango
-OFFSET           = 1  # Offset que determina los puntos hacia adelante de la trayectoria
+OFFSET           = 25  # Offset que determina los puntos hacia adelante de la trayectoria
                        # que depende de el cambio de distancia entre los puntos.
 CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
 
@@ -12,19 +12,16 @@ CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (T
 def obtener_puntos():
     SKIP_ROWS = 1
     DELIMITER = ","
-    WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/circulo_5m_300pts.csv"
+    WAYPOINTS_FILE  =  "circulo_5m_300pts.csv"
     waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
     return waypoints
 
 def obtener_trayectoria(waypoints, current_x, current_y):
 
-    pdb.set_trace()
-
     global current_target_idx
 
-    # Si no existe aún un índice de objetivo, inicializarlo al punto más cercano
-    if current_target_idx is None:
-        current_target_idx = encontrar_idx_mas_cercano(waypoints, current_x, current_y)
+    # Obtener el indice objetivo siempre dependiendo de la posicion de coordenadas
+    current_target_idx = encontrar_idx_mas_cercano(waypoints, current_x, current_y)
     
     # Obtener el punto objetivo actual
     punto_objetivo = waypoints[current_target_idx]
@@ -64,25 +61,25 @@ def main():
     global current_target_idx
     current_target_idx = None  # ← ¡reinicio explícito!
 
-    waypoints = np.array([
-        [1.0,  2.0],
-        [3.5,  5.0],
-        [2.2,  8.1],
-        [7.5,  1.5],
-        [6.3,  4.8],
-        [9.0,  0.5],
-        [4.2,  7.3],
-        [5.5,  3.2],
-        [8.4,  6.6],
-        [0.9,  9.0]
-    ])
+    #waypoints = np.array([
+    #    [1.0,  2.0],
+    #    [3.5,  5.0],
+    #    [2.2,  8.1],
+    #    [7.5,  1.5],
+    #    [6.3,  4.8],
+    #    [9.0,  0.5],
+    #   [5.5,  3.2],
+    #    [8.4,  6.6],
+    #    [0.9,  9.0]
+    #])
 
     while True:
         # Ejecutar prueba
         current_x = float(input("da el valor de x\n"))
         current_y = float(input("da el valor de y\n"))
 
-
+        waypoints = obtener_puntos()
+        
         trajectory_x, trajectory_y = obtener_trayectoria(waypoints, current_x, current_y)
 
         print(f"Resultado -> trajectory_x: {trajectory_x}, trajectory_y: {trajectory_y}")
