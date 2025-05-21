@@ -111,13 +111,13 @@ class DescentralizedPoint:
         # Obtener los puntos de la trayectoria
         self.obtener_trayectoria(waypoints)
 
-        # Encontrar sguiente punto de la trayectoria en x y y
-        next_trayectory_x = waypoints[self.current_target_idx][0]
-        next_trayectory_y = waypoints[self.current_target_idx][1]
+        # Encontrar sguiente punto de la trayectoria en x y y, se busca el siguiente punto en la trayectoria para hacer la derivada
+        next_trayectory_x = waypoints[self.current_target_idx + 1][0] 
+        next_trayectory_y = waypoints[self.current_target_idx + 1][1]
 
         # Derivada de la trayectoria
-        self.trajectory_dx = (self.trajectory_x - next_trayectory_x) / tiempo_ejecucion
-        self.trajectory_dy = (self.trajectory_y - next_trayectory_y) / tiempo_ejecucion
+        self.trajectory_dx = (next_trayectory_x - self.trajectory_x) / tiempo_ejecucion
+        self.trajectory_dy = (next_trayectory_y - self.trajectory_y) / tiempo_ejecucion
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
