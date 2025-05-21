@@ -108,11 +108,16 @@ class DescentralizedPoint:
         self.current_y = odom_msg.pose.pose.position.y
         self.current_theta = theta
 
+        # Obtener los puntos de la trayectoria
         self.obtener_trayectoria(waypoints)
 
+        # Encontrar sguiente punto de la trayectoria en x y y
+        next_trayectory_x = waypoints[self.current_target_idx][0]
+        next_trayectory_y = waypoints[self.current_target_idx][1]
+
         # Derivada de la trayectoria
-        self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_ejecucion
-        self.trajectory_dy = (self.trajectory_y - self.current_y) / tiempo_ejecucion
+        self.trajectory_dx = (self.trajectory_x - next_trayectory_x) / tiempo_ejecucion
+        self.trajectory_dy = (self.trajectory_y - next_trayectory_y) / tiempo_ejecucion
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
