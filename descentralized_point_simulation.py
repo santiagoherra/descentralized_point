@@ -6,6 +6,10 @@ import numpy as np
 import tf
 import math
 
+from pp_utils import get_current_waypoint
+
+import pdb
+
 # Twist es el tipo de mensaje por el que se publica la velocidad del robot
 from geometry_msgs.msg import Twist
 
@@ -16,9 +20,12 @@ from nav_msgs.msg import Odometry
 wheel_base      = 0.276 / 2  # Mitad de la distancia entre las ruedas (b)
 R               = 0.0505     # Radio de la rueda
 lenght_g        = 0.0505     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 1          # Ganancia de la velocidad lineal
-KP_GAIN         = 1          # Ganancia proporcional de la posición
+KV_GAIN         = 0.05          # Ganancia de la velocidad lineal
+KP_GAIN         = 0.05          # Ganancia proporcional de la posición
 tiempo_ejecucion = 0.022     # Tiempo de reiteracion
+
+drive_topic         = "/cmd_vel" 
+odom_topic         = "/odom" 
 
 ### Clase ###
 class DescentralizedPoint:
@@ -37,88 +44,45 @@ class DescentralizedPoint:
         self.actuaction = Twist()
 
 
-        self.drive_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=100)
-        self.odom_sub = rospy.Subscriber("/odom", Odometry, self.punto_descentralizado, queue_size=100)
+        self.drive_pub = rospy.Publisher(drive_topic, Twist, queue_size=100)
+        self.odom_sub = rospy.Subscriber(odom_topic, Odometry, self.punto_descentralizado, queue_size=100)
 
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
-        WAYPOINTS_FILE  = "./trayectoria_circulo.csv"
+        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/circulo_5m_300pts.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
 
     def obtener_trayectoria(self, waypoints):
         """
-        Encuentra el valor más cercano a 'target' en una lista ordenada 'arr'.
-        :param arr: Lista ordenada de números.
-        :param target: Valor objetivo.
-        :return: El valor más cercano.
+        Encuentra el waypoint más cercano a la posición actual y selecciona el siguiente en la lista como trayectoria.
         """
-        # Ordenar el waypoint usando sort.
-        sorted_waypoint = waypoints.sort()
 
-        # Obtener el punto mas cercano a la trayectoria y el que le sigue
-        # para la coordenada x
-        left = 0
-        right = len(sorted_waypoint[0]) - 1
+        # Posición actual
+        current_position = np.array([self.current_x, self.current_y])
 
-        # Búsqueda binaria modificada.
-        while left <= right:
-            mid = left + (right - left) // 2
+        # Inicializar variables para búsqueda lineal
+        min_dist = float('inf')
+        nearest_idx = 0
 
-            if sorted_waypoint[0, mid] == self.current_x:
-                return sorted_waypoint[0, mid + 1]
+        # Búsqueda lineal del punto más cercano
+        for i, point in enumerate(waypoints):
+            dist = np.linalg.norm(current_position - point)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_idx = i
 
-            # Decidir si buscamos a la izquierda o derecha.
-            if self.current_x < sorted_waypoint[0, mid]:
-                right = mid - 1
-            else:
-                left = mid + 1
+        # Offset: cuántos puntos adelante tomas como trayectoria
+        offset = 20
+        next_idx = (nearest_idx + offset) % len(waypoints)  # para hacer wraparound
 
-        # Al final del while:
-        # right es el menor índice con arr[right] <= target.
-        # left es el mayor índice con arr[left] >= target.
-        # Ahora comparamos quién está más cerca. Si la distancia es igual para los dos
-        # se agarra el mayor valor.
-        if abs(sorted_waypoint[0, left] - self.current_x) <= abs(sorted_waypoint[0, right] - self.current_x):
-            # Cambia el valor de la trayectoria, es posible que tenga que cambiar el offset de la trajectoria
-            try: # Si se sale del indice vuelve al inicio de la trajectoria
-                self.trajectory_x = sorted_waypoint[0, left + 5]
-            except:
-                self.trajectory_x = sorted_waypoint[0, 0]
-        else:
-            try:
-                self.trajectory_x = sorted_waypoint[0, right + 5]
-            except:
-                self.trajectory_x = sorted_waypoint[0, 0]
+        # Guardar la trayectoria seleccionada
+        self.trajectory_x = waypoints[next_idx, 0]
+        self.trajectory_y = waypoints[next_idx, 1]
 
-        # Ahora se realiza el mismo algoritmo para encontrar el menor valor en la 
-        # coordenada Y
+        return None  # opcional, puede devolver (trajectory_x, trajectory_y) si prefieres
 
-        left = 0
-        right = len(sorted_waypoint[1]) - 1
-
-        while left <= right:
-            mid = left + (right - left) // 2
-
-            if sorted_waypoint[1, mid] == self.current_y:
-                return sorted_waypoint[1, mid + 1]
-
-            if self.current_y < sorted_waypoint[1, mid]:
-                right = mid - 1
-            else:
-                left = mid + 1
-
-        if abs(sorted_waypoint[1, left] - self.current_y) <= abs(sorted_waypoint[1, right] - self.current_y):
-            try:
-                self.trajectory_y = sorted_waypoint[1, left + 5]
-            except:
-                self.trajectory_y = sorted_waypoint[1, 0]
-        else:
-            try:
-                self.trajectory_y = sorted_waypoint[1, right + 5]
-            except:
-                self.trajectory_y = sorted_waypoint[1, 0]
 
     def punto_descentralizado(self, odom_msg):
 
@@ -138,12 +102,17 @@ class DescentralizedPoint:
         self.obtener_trayectoria(waypoints)
 
         # Derivada de la trayectoria
-        self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_ejecucion
-        self.trajectory_dy = (self.trajectory_y - self.current_y) / tiempo_ejecucion
+        #self.trajectory_dx = (self.trajectory_x - self.current_x) / tiempo_ejecucion
+        #self.trajectory_dy = (self.trajectory_y - self.current_y) / tiempo_ejecucion
+
+        pdb.set_trace()
+
+        self.trajectory_dx = 3
+        self.trajectory_dy = 3
 
                 # Componente proporcional a la velocidad de referencia
-        vel_component = KV_GAIN * np.array([self.trajectory_dx,
-                                            self.trajectory_dy])
+        vel_component = KV_GAIN * np.array([[self.trajectory_dx],
+                                            [self.trajectory_dy]])
 
         # Componente proporcional a la posición
         error_x = self.trajectory_x - (self.current_x + lenght_g *
@@ -155,7 +124,8 @@ class DescentralizedPoint:
         krp_identidad = np.array([[KP_GAIN, 0],
                                 [0, KP_GAIN]])
 
-        e_krp = krp_identidad @ np.array([error_x, error_y])
+        e_krp = krp_identidad @ np.array([[error_x],
+                                          [error_y]])
 
         # Resultado final del control cinemático
         control_cinematico = vel_component + e_krp
@@ -172,16 +142,30 @@ class DescentralizedPoint:
         # Velocidades de referencia de las ruedas (lineales)
         v = B @ control_cinematico
 
-        self.actuaction.linear.x = v
+        #pdb.set_trace()
+
+        # Obtener velocidades de las dos ruedas
+        v_izq = v[0]
+        v_der = v[1]
+
+        #Obtener velocidad lineal
+        v_lineal = (v_izq + v_der) / 2
+
+        # Asignar actuacion
+        self.actuaction.linear.x = v_lineal
 
         # Velocidad angular del robot a la mitad
-        omega = ((v[1] - v[0]) / (self.wheelbase))
+        #omega = ((v_der - v_izq) / (self.wheelbase))
+
+        omega = 1/R * v_lineal
 
         self.actuaction.angular.z = omega
 
         # Se publica el mensaje y se imprime en terminal la posicion
         self.drive_pub.publish(self.actuaction)
         print("Current x: {}    Current y: {}".format(self.current_x, self.current_y))
+
+
 
 def main():
     rospy.init_node("descentralized_point_simulation")
