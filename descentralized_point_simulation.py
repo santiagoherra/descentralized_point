@@ -15,16 +15,22 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 
 ### Parámetros ###
-wheel_base      = 0.577  # Mitad de la distancia entre las ruedas (b)
-R               = 0.511     # Radio de la rueda
-lenght_g        = 0.625     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 10          # Ganancia de la velocidad lineal
-KP_GAIN         = 5          # Ganancia proporcional de la posición
+wheel_base      = 0.160/2  # Mitad de la distancia entre las ruedas (b)
+lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
+KV_GAIN         = 1          # Ganancia de la velocidad lineal
+KP_GAIN         = 1        # Ganancia proporcional de la posición
 tiempo_ejecucion = 0.022     # Tiempo de reiteracion
-DISTANCIA_UMBRAL = 1.5  # Distancia a la que el robot esta fuera de rango
-OFFSET           = 10  # Offset que determina los puntos hacia adelante de la trayectoria
+DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
+DISTANCIA_ALTA = 1
+DISTANCIA_MEDIA = 0.75
+DISTANCIA_BAJA = 0.5
+OFFSET_BAJO    = 15 # Offset que determina los puntos hacia adelante de la trayectoria
                        # que depende de el cambio de distancia entre los puntos.
+OFFSET_MEDIO = 10
+OFFSET_ALTO = 5
 CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
+contador_ciclo = 0
+primer_ciclo = False
 
 drive_topic         = "/cmd_vel" 
 odom_topic         = "/odom" 
@@ -53,38 +59,47 @@ class DescentralizedPoint:
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
-        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/circulo_5m_300pts.csv"
+        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/circulo_5m_300pts.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
 
     def obtener_trayectoria(self, waypoints):
-        # Si no existe aún un índice de objetivo, inicializarlo al punto más cercano
-        if not hasattr(self, 'current_target_idx') or self.current_target_idx is None:
+        global primer_ciclo, contador_ciclo
+
+        # Inicializar índice objetivo solo una vez
+        if self.current_target_idx is None and not primer_ciclo:
             self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
-        
-        # Obtener el punto objetivo actual
+            primer_ciclo = True
+
         punto_objetivo = waypoints[self.current_target_idx]
-        
-        # Calcular la distancia a ese punto
+
         dx = punto_objetivo[0] - self.current_x
         dy = punto_objetivo[1] - self.current_y
         distancia = np.sqrt(dx**2 + dy**2)
-        
+
         if distancia <= DISTANCIA_UMBRAL:
-            siguiente_idx = self.current_target_idx + OFFSET
+
+            if DISTANCIA_MEDIA < distancia <= DISTANCIA_ALTA:
+                siguiente_idx = self.current_target_idx + OFFSET_ALTO
+            elif DISTANCIA_BAJA < distancia <= DISTANCIA_MEDIA:
+                siguiente_idx = self.current_target_idx + OFFSET_MEDIO
+            elif distancia < DISTANCIA_BAJA:
+                siguiente_idx = self.current_target_idx + OFFSET_BAJO
+            else:
+                siguiente_idx = self.current_target_idx
+
             if siguiente_idx < len(waypoints):
                 self.current_target_idx = siguiente_idx
             else:
                 if CONTINUIDAD:
-                    self.current_target_idx = OFFSET  # reiniciar con salto desde inicio
+                    self.current_target_idx = OFFSET_ALTO  # reiniciar
                 else:
                     self.current_target_idx = len(waypoints) - 1  # quedarse al final
 
-
-        # Actualizar los valores de la trayectoria
+    # Actualizar valores de trayectoria siempre
         self.trajectory_x = waypoints[self.current_target_idx][0]
         self.trajectory_y = waypoints[self.current_target_idx][1]
-    
+
     def encontrar_idx_mas_cercano(self, waypoints):
 
         posicion_actual = np.array([self.current_x, self.current_y])
@@ -112,12 +127,15 @@ class DescentralizedPoint:
         self.obtener_trayectoria(waypoints)
 
         # Encontrar sguiente punto de la trayectoria en x y y
-        next_trayectory_x = waypoints[self.current_target_idx][0]
-        next_trayectory_y = waypoints[self.current_target_idx][1]
+        next_trayectory_x = waypoints[self.current_target_idx + 1][0] # Offset para encontrar derivada
+        next_trayectory_y = waypoints[self.current_target_idx + 1][1] # Offset para encontrar derivada
 
         # Derivada de la trayectoria
-        self.trajectory_dx = (self.trajectory_x - next_trayectory_x) / tiempo_ejecucion
-        self.trajectory_dy = (self.trajectory_y - next_trayectory_y) / tiempo_ejecucion
+        #self.trajectory_dx = (next_trayectory_x - self.trajectory_x) / tiempo_ejecucion
+        #self.trajectory_dy = (next_trayectory_y - self.trajectory_y) / tiempo_ejecucion
+
+        self.trajectory_dx = 2
+        self.trajectory_dy = 2
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
@@ -161,17 +179,21 @@ class DescentralizedPoint:
         # Asignar actuacion
         self.actuaction.linear.x = v_lineal
 
-        # Velocidad angular del robot a la mitad
-        #omega = ((v_der - v_izq) / (self.wheelbase))
-
-        omega = 1/R * v_lineal
+        # Velocidad angular 
+        omega = ((v_der - v_izq) / (self.wheelbase))
 
         self.actuaction.angular.z = omega
 
-        # Se publica el mensaje y se imprime en terminal la posicion
+        # Se publica el mensaje y se imprime en terminal las variables
         self.drive_pub.publish(self.actuaction)
-        print("Current x: {}    Current y: {}".format(self.current_x, self.current_y))
+        
 
+        print(
+            "Velocidad Izq: " + str(v_izq) + " | Velocidad Der: " + str(v_der) + "\n" +
+            "Trajectory X: " + str(self.trajectory_x) + " | Trajectory Y: " + str(self.trajectory_y) + "\n" +
+            "Dx Trajectory: " + str(self.trajectory_dx) + " | Dy Trajectory: " + str(self.trajectory_dy) + "\n" +
+            "Current X: " + str(self.current_x) + " | Current Y: " + str(self.current_y))
+        
 
 
 def main():
