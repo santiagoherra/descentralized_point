@@ -29,8 +29,6 @@ OFFSET_BAJO    = 15 # Offset que determina los puntos hacia adelante de la traye
 OFFSET_MEDIO = 10
 OFFSET_ALTO = 5
 CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
-contador_ciclo = 0
-primer_ciclo = False
 
 drive_topic         = "/cmd_vel" 
 odom_topic         = "/odom" 
@@ -134,8 +132,8 @@ class DescentralizedPoint:
         #self.trajectory_dx = (next_trayectory_x - self.trajectory_x) / tiempo_ejecucion
         #self.trajectory_dy = (next_trayectory_y - self.trajectory_y) / tiempo_ejecucion
 
-        self.trajectory_dx = 2
-        self.trajectory_dy = 2
+        self.trajectory_dx = 0.005
+        self.trajectory_dy = 0.005
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
@@ -169,36 +167,37 @@ class DescentralizedPoint:
         # Velocidades de referencia de las ruedas (lineales)
         v = B @ control_cinematico
 
-        # Obtener velocidades de las dos ruedas
-        v_izq = v[0]
-        v_der = v[1]
+        # obtener valores de la velocidad lineal y angular
 
-        #Obtener velocidad lineal
-        v_lineal = (v_izq + v_der) / 2
+        mod_cine_direc = np.array([[1/2, 1/2],
+                        [-1/(2 * wheel_base), 1/(2 * wheel_base)]
+                        ])
+
+        v_w_lineal = mod_cine_direc @ v
+
+        v_lineal = v_w_lineal[0]
+
+        w_lineal = v_w_lineal[1]
 
         # Asignar actuacion
         self.actuaction.linear.x = v_lineal
 
-        # Velocidad angular 
-        omega = ((v_der - v_izq) / (self.wheelbase))
-
-        self.actuaction.angular.z = omega
+        self.actuaction.angular.z = w_lineal
 
         # Se publica el mensaje y se imprime en terminal las variables
         self.drive_pub.publish(self.actuaction)
         
 
         print(
-            "Velocidad Izq: " + str(v_izq) + " | Velocidad Der: " + str(v_der) + "\n" +
+            "Velocidad Izq: " + str(v[0]) + " | Velocidad Der: " + str(v[1]) + "\n" +
             "Trajectory X: " + str(self.trajectory_x) + " | Trajectory Y: " + str(self.trajectory_y) + "\n" +
             "Dx Trajectory: " + str(self.trajectory_dx) + " | Dy Trajectory: " + str(self.trajectory_dy) + "\n" +
-            "Current X: " + str(self.current_x) + " | Current Y: " + str(self.current_y))
+            "Current X: " + str(self.current_x) + " | Current Y: " + str(self.current_y) + "\n")
         
-
 
 def main():
     rospy.init_node("descentralized_point_simulation")
-    DescentralizedPoint()
+    dp = DescentralizedPoint()
     
     print("\n descentralized point simulation working :)")
 
