@@ -17,18 +17,18 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 4          # Ganancia derivativa
-KP_X_GAIN       = 0.0005        # Ganancia proporcional
-KP_Y_GAIN       = 0.0005 
+KV_GAIN         = 1.5          # Ganancia derivativa
+KP_X_GAIN       = 0.1875        # Ganancia proporcional
+KP_Y_GAIN       = 0.1875 
 tiempo_ejecucion = 0.1     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
-DISTANCIA_ALTA = 1
-DISTANCIA_MEDIA = 0.75
-DISTANCIA_BAJA = 0.5
-OFFSET_BAJO    = 15 # Offset que determina los puntos hacia adelante de la trayectoria
+DISTANCIA_ALTA = 2.5
+DISTANCIA_MEDIA = 2
+DISTANCIA_BAJA = 1.5
+OFFSET_BAJO    = 20 # Offset que determina los puntos hacia adelante de la trayectoria
                        # que depende de el cambio de distancia entre los puntos.
-OFFSET_MEDIO = 10
-OFFSET_ALTO = 5
+OFFSET_MEDIO = 15
+OFFSET_ALTO = 10
 CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
 
 drive_topic         = "/cmd_vel" 
@@ -135,8 +135,8 @@ class DescentralizedPoint:
         #self.trajectory_dx = (next_trayectory_x - self.trajectory_x) / tiempo_ejecucion
         #self.trajectory_dy = (next_trayectory_y - self.trajectory_y) / tiempo_ejecucion
 
-        self.trajectory_dx = 1
-        self.trajectory_dy = 1
+        self.trajectory_dx = 0.01
+        self.trajectory_dy = 0.01
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
