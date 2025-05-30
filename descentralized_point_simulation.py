@@ -15,11 +15,12 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 
 ### Parámetros ###
-wheel_base      = 0.160/2  # Mitad de la distancia entre las ruedas (b)
+wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 1          # Ganancia de la velocidad lineal
-KP_GAIN         = 1        # Ganancia proporcional de la posición
-tiempo_ejecucion = 0.022     # Tiempo de reiteracion
+KV_GAIN         = 4          # Ganancia derivativa
+KP_X_GAIN       = 0.0005        # Ganancia proporcional
+KP_Y_GAIN       = 0.0005 
+tiempo_ejecucion = 0.1     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
 DISTANCIA_ALTA = 1
 DISTANCIA_MEDIA = 0.75
@@ -51,6 +52,8 @@ class DescentralizedPoint:
 
         self.actuaction = Twist()
 
+        self.rate = rospy.Rate(10) # Frecuencia a 10Hz
+
         self.drive_pub = rospy.Publisher(drive_topic, Twist, queue_size=100)
         self.odom_sub = rospy.Subscriber(odom_topic, Odometry, self.punto_descentralizado, queue_size=100)
 
@@ -62,7 +65,7 @@ class DescentralizedPoint:
         return waypoints
 
     def obtener_trayectoria(self, waypoints):
-        global primer_ciclo, contador_ciclo
+        global primer_ciclo
 
         # Inicializar índice objetivo solo una vez
         if self.current_target_idx is None and not primer_ciclo:
@@ -132,8 +135,8 @@ class DescentralizedPoint:
         #self.trajectory_dx = (next_trayectory_x - self.trajectory_x) / tiempo_ejecucion
         #self.trajectory_dy = (next_trayectory_y - self.trajectory_y) / tiempo_ejecucion
 
-        self.trajectory_dx = 0.005
-        self.trajectory_dy = 0.005
+        self.trajectory_dx = 1
+        self.trajectory_dy = 1
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
@@ -146,8 +149,8 @@ class DescentralizedPoint:
         error_y = self.trajectory_y - (self.current_y + lenght_g *
                                         np.sin(self.current_theta))
 
-        krp_identidad = np.array([[KP_GAIN, 0],
-                                [0, KP_GAIN]])
+        krp_identidad = np.array([[KP_X_GAIN, 0],
+                                [0, KP_Y_GAIN]])
 
         e_krp = krp_identidad @ np.array([[error_x],
                                           [error_y]])
@@ -157,7 +160,7 @@ class DescentralizedPoint:
 
         # Matriz de conversión (cinemática inversa)
         B = (1 / lenght_g) * np.array([
-            [lenght_g* np.cos(self.current_theta) + 0.5 * wheel_base * np.sin(self.current_theta),
+            [lenght_g * np.cos(self.current_theta) + 0.5 * wheel_base * np.sin(self.current_theta),
               lenght_g * np.sin(self.current_theta) - 0.5 * wheel_base * np.cos(self.current_theta)],
 
             [lenght_g * np.cos(self.current_theta) - 0.5 * wheel_base * np.sin(self.current_theta),
@@ -170,7 +173,7 @@ class DescentralizedPoint:
         # obtener valores de la velocidad lineal y angular
 
         mod_cine_direc = np.array([[1/2, 1/2],
-                        [-1/(2 * wheel_base), 1/(2 * wheel_base)]
+                        [-1/(wheel_base), 1/(wheel_base)]
                         ])
 
         v_w_lineal = mod_cine_direc @ v
@@ -198,6 +201,7 @@ class DescentralizedPoint:
 def main():
     rospy.init_node("descentralized_point_simulation")
     dp = DescentralizedPoint()
+    dp.rate.sleep() # Agregando frecuencia
     
     print("\n descentralized point simulation working :)")
 
