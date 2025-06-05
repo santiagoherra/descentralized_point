@@ -18,18 +18,18 @@ from mecanumrob_common.msg import WheelSpeed
 wheel_base      = 0.276  # Distancia entre las ruedas (b)
 R               = 0.0505
 lenght_g        = 0.0505   # Distancia desde el punto medio del robot hacia el frente (g)
-KV_GAIN         = 1.5          # Ganancia derivativa
-KP_X_GAIN       = 0.1875        # Ganancia proporcional
-KP_Y_GAIN       = 0.1875 
+KV_GAIN         = 0.1          # Ganancia derivativa
+KP_X_GAIN       = 0.19        # Ganancia proporcional
+KP_Y_GAIN       = 0.19 
 tiempo_ejecucion = 0.1     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
-DISTANCIA_ALTA = 2.5
-DISTANCIA_MEDIA = 2
-DISTANCIA_BAJA = 1.5
-OFFSET_BAJO    = 20 # Offset que determina los puntos hacia adelante de la trayectoria
+DISTANCIA_ALTA = 1.5
+DISTANCIA_MEDIA = 1
+DISTANCIA_BAJA = 0.5
+OFFSET_BAJO    = 15 # Offset que determina los puntos hacia adelante de la trayectoria
                        # que depende de el cambio de distancia entre los puntos.
-OFFSET_MEDIO = 15
-OFFSET_ALTO = 10
+OFFSET_MEDIO = 10
+OFFSET_ALTO = 5
 CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
 
 odom_topic = "/odom" # Topico del mensaje de la posicion
@@ -62,6 +62,9 @@ class Descentralized_point():
 
         # Indice de trayectoria
         self.current_target_idx = 0
+        
+        # Frecuencia de muestreo
+        self.rate = rospy.Rate(10) # Frecuencia a 10Hz
 
         # Velocidades de las ruedas izquierda y derecha
         self.izq_pub = rospy.Publisher("%s/motor/SW_pwm" % self.base_name,
@@ -157,17 +160,13 @@ class Descentralized_point():
 
         self.obtener_trayectoria(waypoints)
 
-        
         # Encontrar sguiente punto de la trayectoria en x y y
         next_trayectory_x = waypoints[self.current_target_idx + 1][0] # Offset para encontrar derivada
         next_trayectory_y = waypoints[self.current_target_idx + 1][1] # Offset para encontrar derivada
 
         # Derivada de la trayectoria
-        #self.trajectory_dx = (next_trayectory_x - self.trajectory_x) / tiempo_ejecucion
-        #self.trajectory_dy = (next_trayectory_y - self.trajectory_y) / tiempo_ejecucion
-
-        self.trajectory_dx = 0.01
-        self.trajectory_dx = 0.01
+        self.trajectory_dx = (next_trayectory_x - self.trajectory_x) / tiempo_ejecucion
+        self.trajectory_dy = (next_trayectory_y - self.trajectory_y) / tiempo_ejecucion
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
@@ -222,6 +221,10 @@ class Descentralized_point():
 def main():
     rospy.init_node("RoboclawTester", log_level=rospy.DEBUG)
     prueba = Descentralized_point()
+    prueba.rate.sleep()
+
+    print("\n descentralized point real :) \n")
+
     rospy.spin()
 
 if __name__ == "__main__":
