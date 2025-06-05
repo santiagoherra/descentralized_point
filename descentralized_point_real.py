@@ -18,14 +18,14 @@ from mecanumrob_common.msg import WheelSpeed
 wheel_base      = 0.276  # Distancia entre las ruedas (b)
 R               = 0.0505
 lenght_g        = 0.0505   # Distancia desde el punto medio del robot hacia el frente (g)
-KV_GAIN         = 0.1          # Ganancia derivativa
-KP_X_GAIN       = 0.19        # Ganancia proporcional
-KP_Y_GAIN       = 0.19 
+KV_GAIN         = 0.09          # Ganancia derivativa
+KP_X_GAIN       = 0.40        # Ganancia proporcional
+KP_Y_GAIN       = 0.40 
 tiempo_ejecucion = 0.1     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
-DISTANCIA_ALTA = 1.5
-DISTANCIA_MEDIA = 1
-DISTANCIA_BAJA = 0.5
+DISTANCIA_ALTA = 1.5/2
+DISTANCIA_MEDIA = 1/2
+DISTANCIA_BAJA = 0.5/2
 OFFSET_BAJO    = 15 # Offset que determina los puntos hacia adelante de la trayectoria
                        # que depende de el cambio de distancia entre los puntos.
 OFFSET_MEDIO = 10
@@ -101,8 +101,6 @@ class Descentralized_point():
         self.current_theta += omega * tiempo_ejecucion
 
         # Actualizando la posicion del robot.
-
-        #Preguntar esto
         self.current_x += ((v_der+v_izq)/2) * math.cos(self.current_theta) * tiempo_ejecucion
         self.current_y += ((v_der+v_izq)/2) * math.sin(self.current_theta) * tiempo_ejecucion
 

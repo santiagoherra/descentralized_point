@@ -17,14 +17,15 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 0.1          # Ganancia derivativa
-KP_X_GAIN       = 0.19        # Ganancia proporcional
-KP_Y_GAIN       = 0.19 
+KV_GAIN         = 0.09          # Ganancia derivativa
+KP_X_GAIN       = 0.40        # Ganancia proporcional
+KP_Y_GAIN       = 0.40 
 tiempo_ejecucion = 0.1     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
-DISTANCIA_ALTA = 1.5
-DISTANCIA_MEDIA = 1
-DISTANCIA_BAJA = 0.5
+DISTANCIA_ALTA = 1.5/2        # Se deben de cambiar los valores de las distancias de umbral dependiendo
+                            # de la trayectoria recorrida.
+DISTANCIA_MEDIA = 1/2
+DISTANCIA_BAJA = 0.5/2
 OFFSET_BAJO    = 15 # Offset que determina los puntos hacia adelante de la trayectoria
                        # que depende de el cambio de distancia entre los puntos.
 OFFSET_MEDIO = 10
@@ -60,7 +61,7 @@ class DescentralizedPoint:
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
-        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/circulo_5m_300pts.csv"
+        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/circulo_2m_300puntos.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
 
