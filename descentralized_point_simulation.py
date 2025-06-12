@@ -180,6 +180,12 @@ class DescentralizedPoint:
 
         w_lineal = v_w_lineal[1]
 
+        if(v_lineal > 0.22): # Agregando limitaciones de la señal de control para prevenir errores:
+            v_lineal = 0.22   # valores obtenidos en la pagina de ros.
+
+        if(w_lineal > 2.84):
+            w_lineal = 2.84
+
         # Asignar actuacion
         self.actuaction.linear.x = v_lineal
 
