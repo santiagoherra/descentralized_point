@@ -202,6 +202,13 @@ class Descentralized_point():
         v_izq_PWM = v[0] * 100
         v_der_PWM = v[1] * 100
 
+        # Definiendo los valores maximos de PWM para los motores obtenidos
+        if(v_izq_PWM > 130):
+            v_izq_PWM = 130
+
+        if(v_der_PWM > 130):
+            v_der_PWM = 130    
+
         # Imprimir los mensajes
         print(
             "Velocidad Izq: " + str(v[0]) + " | Velocidad Der: " + str(v[1]) + "\n" +
