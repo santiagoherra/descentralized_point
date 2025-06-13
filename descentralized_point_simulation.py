@@ -17,19 +17,19 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 0.1          # Ganancia derivativa
+KV_GAIN         = 0.003          # Ganancia derivativa
 KP_X_GAIN       = 0.40        # Ganancia proporcional
 KP_Y_GAIN       = 0.40 
 tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
-DISTANCIA_ALTA = 1.5/2        # Se deben de cambiar los valores de las distancias de umbral dependiendo
+DISTANCIA_ALTA = 1.3/2        # Se deben de cambiar los valores de las distancias de umbral dependiendo
                             # de la trayectoria recorrida.
-DISTANCIA_MEDIA = 1/2
-DISTANCIA_BAJA = 0.5/2
-OFFSET_BAJO    = 15 # Offset que determina los puntos hacia adelante de la trayectoria
+DISTANCIA_MEDIA = 0.8/2
+DISTANCIA_BAJA = 0.3/2
+OFFSET_BAJO    = 12 # Offset que determina los puntos hacia adelante de la trayectoria
                        # que depende de el cambio de distancia entre los puntos.
-OFFSET_MEDIO = 10
-OFFSET_ALTO = 5
+OFFSET_MEDIO = 7
+OFFSET_ALTO = 2
 CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
 
 drive_topic         = "/cmd_vel" 
@@ -61,7 +61,7 @@ class DescentralizedPoint:
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
-        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/trayectorias/circulo_5m_300pts.csv"
+        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/trayectorias/circulo_2m_300puntos.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
 
@@ -137,8 +137,12 @@ class DescentralizedPoint:
         #self.trajectory_dy = (next_trayectory_y - self.current_x) / tiempo_ejecucion
 
         # Derivada de la trayectoria
-        self.trajectory_dx = (0.027) / tiempo_ejecucion
-        self.trajectory_dy = (0.027) / tiempo_ejecucion
+        #self.trajectory_dx = (0.027) / tiempo_ejecucion
+        #self.trajectory_dy = (0.027) / tiempo_ejecucion
+
+        # Derivada de la trayectoria
+        self.trajectory_dx = self.trajectory_x - self.current_x
+        self.trajectory_dy = self.trajectory_y - self.current_y
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
