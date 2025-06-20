@@ -17,7 +17,7 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 0.003          # Ganancia derivativa
+KV_GAIN         = 0.9           # Ganancia derivativa
 KP_X_GAIN       = 0.40        # Ganancia proporcional
 KP_Y_GAIN       = 0.40 
 tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
@@ -61,7 +61,7 @@ class DescentralizedPoint:
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
-        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/trayectorias/circulo_2m_300puntos.csv"
+        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_zigzag.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
 
@@ -127,18 +127,6 @@ class DescentralizedPoint:
 
         # Obtener los puntos de la trayectoria
         self.obtener_trayectoria(waypoints)
-
-        # Encontrar sguiente punto de la trayectoria en x y y
-        #next_trayectory_x = waypoints[self.current_target_idx - 30][0] # Offset para encontrar derivada
-        #next_trayectory_y = waypoints[self.current_target_idx - 30][1] # Offset para encontrar derivada
-
-        # Derivada de la trayectoria
-        #self.trajectory_dx = (next_trayectory_x - self.current_x) / tiempo_ejecucion
-        #self.trajectory_dy = (next_trayectory_y - self.current_x) / tiempo_ejecucion
-
-        # Derivada de la trayectoria
-        #self.trajectory_dx = (0.027) / tiempo_ejecucion
-        #self.trajectory_dy = (0.027) / tiempo_ejecucion
 
         # Derivada de la trayectoria
         self.trajectory_dx = self.trajectory_x - self.current_x
