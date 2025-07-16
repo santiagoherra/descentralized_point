@@ -24,6 +24,8 @@ tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8          # Distancia a la que el robot esta fuera de rango
 DISTANCIA = 0.5               # Parametro de control de distancia
 CONTINUIDAD = True            # Bandera que determina si una trayectoria es continua (True) o no (False)
+V_LINEAL_MAX = 0.22           # Valor de velocidad linear maxima
+W_ANGULAR_MAX = 2.84          # Valor de velocidad angular maxima 
 
 # Direccion de archivo que contiene la ruta de la trayectoria
 WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/"
@@ -47,30 +49,49 @@ odom_topic         = "/odom"
 class DescentralizedPoint:
     def __init__(self):
         self.wheelbase = wheel_base
+
+        # Valores de odometria del robot movil
         self.current_x = 0.0
         self.current_y = 0.0
         self.current_theta = 0.0
 
+        # Coordenadas de el siguiente punto en la trayectoria
         self.trajectory_x = 0.0
         self.trajectory_y = 0.0
 
+        # Derivada de la trayectoria recorrida del robot
         self.trajectory_dx = 0.0
         self.trajectory_dy = 0.0
 
+        # Valor de indice de punto de ruta
         self.current_target_idx = 0
 
+        # Clase para publicar las variables a controlar
         self.actuaction = Twist()
 
+        # Variables de publicacion y suscripcion a topicos
         self.drive_pub = rospy.Publisher(drive_topic, Twist, queue_size=100)
         self.odom_sub = rospy.Subscriber(odom_topic, Odometry, self.punto_descentralizado, queue_size=100)
 
     def obtener_puntos(self):
+        """
+        Carga los puntos de trayectoria desde el archivo CSV especificado en WAYPOINTS_FILE.
+        Retorna:
+        np.ndarray: Un arreglo con los puntos (x, y) de la trayectoria.
+        """
+
         SKIP_ROWS = 1
         DELIMITER = ","
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
 
     def obtener_trayectoria(self, waypoints):
+        """
+        Determina el punto objetivo de la trayectoria basado en la posición actual del robot
+        y actualiza los valores a seguir. Utiliza umbrales de distancia para decidir cuánto
+        avanzar en el índice de la trayectoria. Si se alcanza el final, reinicia o se detiene según 
+        la configuración de continuidad.
+        """
         global primer_ciclo
 
         # Inicializar índice objetivo solo una vez
@@ -108,6 +129,10 @@ class DescentralizedPoint:
         self.trajectory_y = waypoints[self.current_target_idx][1]
 
     def encontrar_idx_mas_cercano(self, waypoints):
+        """
+        Calcula el índice del waypoint más cercano a la posición actual del robot usando la 
+        distancia euclidiana. Retorna el índice del punto más próximo en la trayectoria.
+        """
 
         posicion_actual = np.array([self.current_x, self.current_y])
         distancias = np.linalg.norm(waypoints - posicion_actual, axis=1)
@@ -116,6 +141,13 @@ class DescentralizedPoint:
 
 
     def punto_descentralizado(self, odom_msg):
+        """
+        Calcula y aplica la señal de control para el robot en base a su posición actual y la 
+        trayectoria deseada. Convierte la orientación del robot desde cuaterniones a ángulos de 
+        Euler, calcula errores de posición y velocidad, y genera las velocidades de rueda 
+        utilizando un modelo cinemático inverso. Limita las señales de control y publica los 
+        valores calculados para accionar el robot.
+        """
 
         waypoints = self.obtener_puntos()
 
@@ -181,11 +213,12 @@ class DescentralizedPoint:
 
         w_lineal = v_w_lineal[1]
 
-        if(v_lineal > 0.22): # Agregando limitaciones de la señal de control para prevenir errores:
-            v_lineal = 0.22   # valores obtenidos en la pagina de ros.
+        # Agregando limitaciones de la señal de control para prevenir errores:
+        if(v_lineal > V_LINEAL_MAX): 
+            v_lineal = V_LINEAL_MAX   
 
-        if(w_lineal > 2.84):
-            w_lineal = 2.84
+        if(w_lineal > W_ANGULAR_MAX):
+            w_lineal = W_ANGULAR_MAX
 
         # Asignar actuacion
         self.actuaction.linear.x = v_lineal
@@ -203,6 +236,12 @@ class DescentralizedPoint:
             "Current X: " + str(self.current_x) + " | Current Y: " + str(self.current_y) + "\n")
         
 def obtener_primeras_dos_filas_csv(ruta_csv, incluir_cabecera=False):
+    """
+    Carga las primeras dos filas de un archivo CSV usando NumPy. Si se indica incluir la 
+    cabecera, se devuelven tres filas (cabecera + dos datos); de lo contrario, se omite la 
+    primera fila y se devuelven solo las dos siguientes.
+    """
+
     if incluir_cabecera:
         datos = np.genfromtxt(ruta_csv, delimiter=',', dtype=str, max_rows=3)
     else:
@@ -210,25 +249,38 @@ def obtener_primeras_dos_filas_csv(ruta_csv, incluir_cabecera=False):
     return datos
 
 def definir_parametros(deltax):
+    """
+    Define los parámetros globales de distancia y desplazamiento (offset) según un valor 
+    delta de separación entre puntos. Divide la distancia máxima en tres rangos (alta, media 
+    y baja) y calcula los respectivos offsets redondeados para cada rango.
+    """
+
     global OFFSET_ALTO, OFFSET_MEDIO, OFFSET_BAJO, DISTANCIA_ALTA, DISTANCIA_MEDIA, DISTANCIA_BAJA
 
-    # Definiendo valores de distancia
+    # Definiendo valores de distancia dividiendolas en 3
     DISTANCIA_ALTA = DISTANCIA
     DISTANCIA_MEDIA = DISTANCIA * (2/3)
     DISTANCIA_BAJA = DISTANCIA * (1/3)
 
-    # Definiendo valores de offset
+    # Definiendo valores de offset para cada una de las distancias
     OFFSET_ALTO = round(DISTANCIA / deltax)
     OFFSET_MEDIO = round(DISTANCIA_MEDIA / deltax)
     OFFSET_BAJO = round(DISTANCIA_BAJA / deltax)
 
 def main():
+    """
+    Función principal del nodo. Calcula el valor de delta x a partir de los primeros puntos de 
+    la trayectoria, define los parámetros globales necesarios, inicializa el nodo ROS y el 
+    objeto de control descentralizado, y mantiene el nodo en ejecución.
+    """
+
     # Obteniendo el valor de offset del indice de ruta
     datos_deltax = obtener_primeras_dos_filas_csv(WAYPOINTS_FILE)
     deltax = datos_deltax[1] - datos_deltax[0]
 
     definir_parametros(deltax)
 
+    # Iniciando objeto de punto descentralizado
     rospy.init_node("descentralized_point_simulation")
     dp = DescentralizedPoint()
     dp.rate.sleep() 
