@@ -17,20 +17,28 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 0.9           # Ganancia derivativa
+KV_GAIN         = 0.9         # Ganancia derivativa
 KP_X_GAIN       = 0.40        # Ganancia proporcional
 KP_Y_GAIN       = 0.40 
 tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
-DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
-DISTANCIA_ALTA = 1.3/2        # Se deben de cambiar los valores de las distancias de umbral dependiendo
-                            # de la trayectoria recorrida.
-DISTANCIA_MEDIA = 0.8/2
-DISTANCIA_BAJA = 0.3/2
-OFFSET_BAJO    = 12 # Offset que determina los puntos hacia adelante de la trayectoria
-                       # que depende de el cambio de distancia entre los puntos.
-OFFSET_MEDIO = 7
-OFFSET_ALTO = 2
-CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
+DISTANCIA_UMBRAL = 8          # Distancia a la que el robot esta fuera de rango
+DISTANCIA = 0.5               # Parametro de control de distancia
+CONTINUIDAD = True            # Bandera que determina si una trayectoria es continua (True) o no (False)
+
+# Direccion de archivo que contiene la ruta de la trayectoria
+WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/"
+                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_circulo.csv"
+                    )
+
+# Parametros a definir por medio de sofware, definidos en 0 hasta la ejecucion del programa
+OFFSET_ALTO = 0
+OFFSET_MEDIO = 0
+OFFSET_BAJO = 0
+DISTANCIA_ALTA = 0
+DISTANCIA_MEDIA = 0
+DISTANCIA_BAJA = 0
+
+# Topicos para la obtencion de datos del nodo
 
 drive_topic         = "/cmd_vel" 
 odom_topic         = "/odom" 
@@ -53,15 +61,12 @@ class DescentralizedPoint:
 
         self.actuaction = Twist()
 
-        self.rate = rospy.Rate(10) # Frecuencia a 10Hz
-
         self.drive_pub = rospy.Publisher(drive_topic, Twist, queue_size=100)
         self.odom_sub = rospy.Subscriber(odom_topic, Odometry, self.punto_descentralizado, queue_size=100)
 
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
-        WAYPOINTS_FILE  =  "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_zigzag.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
 
@@ -197,11 +202,36 @@ class DescentralizedPoint:
             "Dx Trajectory: " + str(self.trajectory_dx) + " | Dy Trajectory: " + str(self.trajectory_dy) + "\n" +
             "Current X: " + str(self.current_x) + " | Current Y: " + str(self.current_y) + "\n")
         
+def obtener_primeras_dos_filas_csv(ruta_csv, incluir_cabecera=False):
+    if incluir_cabecera:
+        datos = np.genfromtxt(ruta_csv, delimiter=',', dtype=str, max_rows=3)
+    else:
+        datos = np.genfromtxt(ruta_csv, delimiter=',', dtype=str, skip_header=1, max_rows=2)
+    return datos
+
+def definir_parametros(deltax):
+    global OFFSET_ALTO, OFFSET_MEDIO, OFFSET_BAJO, DISTANCIA_ALTA, DISTANCIA_MEDIA, DISTANCIA_BAJA
+
+    # Definiendo valores de distancia
+    DISTANCIA_ALTA = DISTANCIA
+    DISTANCIA_MEDIA = DISTANCIA * (2/3)
+    DISTANCIA_BAJA = DISTANCIA * (1/3)
+
+    # Definiendo valores de offset
+    OFFSET_ALTO = round(DISTANCIA / deltax)
+    OFFSET_MEDIO = round(DISTANCIA_MEDIA / deltax)
+    OFFSET_BAJO = round(DISTANCIA_BAJA / deltax)
 
 def main():
+    # Obteniendo el valor de offset del indice de ruta
+    datos_deltax = obtener_primeras_dos_filas_csv(WAYPOINTS_FILE)
+    deltax = datos_deltax[1] - datos_deltax[0]
+
+    definir_parametros(deltax)
+
     rospy.init_node("descentralized_point_simulation")
     dp = DescentralizedPoint()
-    dp.rate.sleep() # Agregando frecuencia
+    dp.rate.sleep() 
     
     print("\n descentralized point simulation working :)")
 

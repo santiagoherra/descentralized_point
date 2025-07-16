@@ -97,6 +97,7 @@ rosrun turtlebot3_gazebo get_info.py
 Santiago Herra Castro  
 Electrical Engineering Student at Universidad de Costa Rica
 Focus: Mobile Robotics with ROS on Ubuntu 20.04
+email: santicastro60@gmail.com
 
 ---
 
