@@ -39,7 +39,6 @@ DISTANCIA_ALTA = 0
 DISTANCIA_MEDIA = 0
 DISTANCIA_BAJA = 0
 
-
 # Topicos
 
 odom_topic = "/odom" # Topico del mensaje de la posicion

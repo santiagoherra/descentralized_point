@@ -92,12 +92,14 @@ class DescentralizedPoint:
         avanzar en el índice de la trayectoria. Si se alcanza el final, reinicia o se detiene según 
         la configuración de continuidad.
         """
-        global primer_ciclo
+        #global primer_ciclo
 
         # Inicializar índice objetivo solo una vez
-        if self.current_target_idx is None and not primer_ciclo:
-            self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
-            primer_ciclo = True
+        #if self.current_target_idx is None and not primer_ciclo:
+            #self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
+            #primer_ciclo = True
+
+        self.current_target_idx = OFFSET_ALTO
 
         punto_objetivo = waypoints[self.current_target_idx]
 
