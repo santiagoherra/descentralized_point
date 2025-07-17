@@ -29,7 +29,7 @@ W_ANGULAR_MAX = 2.84          # Valor de velocidad angular maxima
 
 # Direccion de archivo que contiene la ruta de la trayectoria
 WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/"
-                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_circulo.csv"
+                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_circular.csv"
                     )
 
 # Parametros a definir por medio de sofware, definidos en 0 hasta la ejecucion del programa
@@ -235,20 +235,28 @@ class DescentralizedPoint:
             "Dx Trajectory: " + str(self.trajectory_dx) + " | Dy Trajectory: " + str(self.trajectory_dy) + "\n" +
             "Current X: " + str(self.current_x) + " | Current Y: " + str(self.current_y) + "\n")
         
-def obtener_primeras_dos_filas_csv(ruta_csv, incluir_cabecera=False):
+def obtener_delta(ruta_csv):
     """
-    Carga las primeras dos filas de un archivo CSV usando NumPy. Si se indica incluir la 
-    cabecera, se devuelven tres filas (cabecera + dos datos); de lo contrario, se omite la 
-    primera fila y se devuelven solo las dos siguientes.
+    Carga la cantidad de filas que hay en el archivo de trayectoria para obtener la cantidad de filas totales
+    para poder obtener el desplazamiento del indice de la trayectoria.
     """
 
-    if incluir_cabecera:
-        datos = np.genfromtxt(ruta_csv, delimiter=',', dtype=str, max_rows=3)
+    with open(ruta_csv, 'r') as f:
+        total_lineas = sum(1 for _ in f)
+    
+    # Restamos 1 por la cabecera
+    cantidad_filas = max(total_lineas - 1, 0)
+    
+    delta = cantidad_filas * 0.05
+
+    if delta == 0:
+        delta = 1
+        return delta
     else:
-        datos = np.genfromtxt(ruta_csv, delimiter=',', dtype=str, skip_header=1, max_rows=2)
-    return datos
+        return delta
 
-def definir_parametros(deltax):
+
+def definir_parametros(delta):
     """
     Define los parámetros globales de distancia y desplazamiento (offset) según un valor 
     delta de separación entre puntos. Divide la distancia máxima en tres rangos (alta, media 
@@ -263,9 +271,9 @@ def definir_parametros(deltax):
     DISTANCIA_BAJA = DISTANCIA * (1/3)
 
     # Definiendo valores de offset para cada una de las distancias
-    OFFSET_ALTO = round(DISTANCIA / deltax)
-    OFFSET_MEDIO = round(DISTANCIA_MEDIA / deltax)
-    OFFSET_BAJO = round(DISTANCIA_BAJA / deltax)
+    OFFSET_ALTO = round(delta)
+    OFFSET_MEDIO = round(delta * 2/3)
+    OFFSET_BAJO = round(delta * 1/3)
 
 def main():
     """
@@ -274,11 +282,11 @@ def main():
     objeto de control descentralizado, y mantiene el nodo en ejecución.
     """
 
-    # Obteniendo el valor de offset del indice de ruta
-    datos_deltax = obtener_primeras_dos_filas_csv(WAYPOINTS_FILE)
-    deltax = datos_deltax[1] - datos_deltax[0]
+    pdb.set_trace()
 
-    definir_parametros(deltax)
+    # Obteniendo el valor de desplazamiento para obtener parametros del algoritmo.
+    delta = obtener_delta(WAYPOINTS_FILE)
+    definir_parametros(delta)
 
     # Iniciando objeto de punto descentralizado
     rospy.init_node("descentralized_point_simulation")
