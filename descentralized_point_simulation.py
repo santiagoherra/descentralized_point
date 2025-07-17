@@ -17,19 +17,19 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 0.9         # Ganancia derivativa
+KV_GAIN         = 2.5         # Ganancia derivativa
 KP_X_GAIN       = 0.40        # Ganancia proporcional
 KP_Y_GAIN       = 0.40 
 tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8          # Distancia a la que el robot esta fuera de rango
-DISTANCIA = 0.5               # Parametro de control de distancia
+DISTANCIA = 0.05              # Parametro de control de distancia
 CONTINUIDAD = True            # Bandera que determina si una trayectoria es continua (True) o no (False)
-V_LINEAL_MAX = 0.22           # Valor de velocidad linear maxima
-W_ANGULAR_MAX = 2.84          # Valor de velocidad angular maxima 
+V_LINEAL_MAX = 0.20           # Valor de velocidad linear maxima
+W_ANGULAR_MAX = 2.70          # Valor de velocidad angular maxima 
 
 # Direccion de archivo que contiene la ruta de la trayectoria
 WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/"
-                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_circular.csv"
+                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_cuadrado.csv"
                     )
 
 # Parametros a definir por medio de sofware, definidos en 0 hasta la ejecucion del programa
@@ -282,8 +282,6 @@ def main():
     objeto de control descentralizado, y mantiene el nodo en ejecución.
     """
 
-    pdb.set_trace()
-
     # Obteniendo el valor de desplazamiento para obtener parametros del algoritmo.
     delta = obtener_delta(WAYPOINTS_FILE)
     definir_parametros(delta)
@@ -291,7 +289,7 @@ def main():
     # Iniciando objeto de punto descentralizado
     rospy.init_node("descentralized_point_simulation")
     dp = DescentralizedPoint()
-    dp.rate.sleep() 
+    #dp.rate.sleep() 
     
     print("\n descentralized point simulation working :)")
 

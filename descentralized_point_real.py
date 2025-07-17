@@ -13,24 +13,34 @@ from std_msgs.msg import Int8
 # WheelSpeed es el tipo de mensaje por el que se lee las velocidades angulares de las ruedas del robot
 from mecanumrob_common.msg import WheelSpeed
 
-### Parameters ###
-
+### Parámetros ###
 wheel_base      = 0.276  # Distancia entre las ruedas (b)
-R               = 0.0505
-lenght_g        = 0.0505   # Distancia desde el punto medio del robot hacia el frente (g)
-KV_GAIN         = 0.09          # Ganancia derivativa
+lenght_g        = 0.15     # Distancia desde el centro al frente del robot (g)
+R               = 0.0505      # Radio de las ruedas del robot
+KV_GAIN         = 2.5         # Ganancia derivativa
 KP_X_GAIN       = 0.40        # Ganancia proporcional
 KP_Y_GAIN       = 0.40 
-tiempo_ejecucion = 0.1     # Tiempo de reiteracion
-DISTANCIA_UMBRAL = 8 # Distancia a la que el robot esta fuera de rango
-DISTANCIA_ALTA = 1.5/2
-DISTANCIA_MEDIA = 1/2
-DISTANCIA_BAJA = 0.5/2
-OFFSET_BAJO    = 15 # Offset que determina los puntos hacia adelante de la trayectoria
-                       # que depende de el cambio de distancia entre los puntos.
-OFFSET_MEDIO = 10
-OFFSET_ALTO = 5
-CONTINUIDAD = True     # Bandera que determina si una trayectoria es continua (True) o no (False)
+tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
+DISTANCIA_UMBRAL = 8          # Distancia a la que el robot esta fuera de rango
+DISTANCIA = 0.05              # Parametro de control de distancia
+CONTINUIDAD = True            # Bandera que determina si una trayectoria es continua (True) o no (False)
+V_LINEAL_MAX = 130           # Valor de velocidad linear maxima en PWM
+
+# Direccion de archivo que contiene la ruta de la trayectoria
+WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/"
+                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_cuadrado.csv"
+                    )
+
+# Parametros a definir por medio de sofware, definidos en 0 hasta la ejecucion del programa
+OFFSET_ALTO = 0
+OFFSET_MEDIO = 0
+OFFSET_BAJO = 0
+DISTANCIA_ALTA = 0
+DISTANCIA_MEDIA = 0
+DISTANCIA_BAJA = 0
+
+
+# Topicos
 
 odom_topic = "/odom" # Topico del mensaje de la posicion
 
@@ -62,9 +72,6 @@ class Descentralized_point():
 
         # Indice de trayectoria
         self.current_target_idx = 0
-        
-        # Frecuencia de muestreo
-        self.rate = rospy.Rate(10) # Frecuencia a 10Hz
 
         # Velocidades de las ruedas izquierda y derecha
         self.izq_pub = rospy.Publisher("%s/motor/SW_pwm" % self.base_name,
@@ -80,7 +87,6 @@ class Descentralized_point():
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
-        WAYPOINTS_FILE  = "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/circulo_5m_300pts.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
     
@@ -221,12 +227,61 @@ class Descentralized_point():
         self.der_pub.publish(Int8(-v_der_PWM))
 
         return None
+    
+def obtener_delta(ruta_csv):
+    """
+    Carga la cantidad de filas que hay en el archivo de trayectoria para obtener la cantidad de filas totales
+    para poder obtener el desplazamiento del indice de la trayectoria.
+    """
+
+    with open(ruta_csv, 'r') as f:
+        total_lineas = sum(1 for _ in f)
+    
+    # Restamos 1 por la cabecera
+    cantidad_filas = max(total_lineas - 1, 0)
+    
+    delta = cantidad_filas * 0.05
+
+    if delta == 0:
+        delta = 1
+        return delta
+    else:
+        return delta
+
+
+def definir_parametros(delta):
+    """
+    Define los parámetros globales de distancia y desplazamiento (offset) según un valor 
+    delta de separación entre puntos. Divide la distancia máxima en tres rangos (alta, media 
+    y baja) y calcula los respectivos offsets redondeados para cada rango.
+    """
+
+    global OFFSET_ALTO, OFFSET_MEDIO, OFFSET_BAJO, DISTANCIA_ALTA, DISTANCIA_MEDIA, DISTANCIA_BAJA
+
+    # Definiendo valores de distancia dividiendolas en 3
+    DISTANCIA_ALTA = DISTANCIA
+    DISTANCIA_MEDIA = DISTANCIA * (2/3)
+    DISTANCIA_BAJA = DISTANCIA * (1/3)
+
+    # Definiendo valores de offset para cada una de las distancias
+    OFFSET_ALTO = round(delta)
+    OFFSET_MEDIO = round(delta * 2/3)
+    OFFSET_BAJO = round(delta * 1/3)
 
 
 def main():
+    """
+    Función principal del nodo. Calcula el valor de delta x a partir de los primeros puntos de 
+    la trayectoria, define los parámetros globales necesarios, inicializa el nodo ROS y el 
+    objeto de control descentralizado, y mantiene el nodo en ejecución.
+    """
+
+    # Obteniendo el valor de desplazamiento para obtener parametros del algoritmo.
+    delta = obtener_delta(WAYPOINTS_FILE)
+    definir_parametros(delta)
+
     rospy.init_node("RoboclawTester", log_level=rospy.DEBUG)
     prueba = Descentralized_point()
-    prueba.rate.sleep()
 
     print("\n descentralized point real :) \n")
 
