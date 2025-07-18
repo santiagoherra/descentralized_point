@@ -17,9 +17,9 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 2.5         # Ganancia derivativa
-KP_X_GAIN       = 0.40        # Ganancia proporcional
-KP_Y_GAIN       = 0.40 
+KV_GAIN         = 2         # Ganancia derivativa
+KP_X_GAIN       = 1.5        # Ganancia proporcional
+KP_Y_GAIN       = 1.5 
 tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8          # Distancia a la que el robot esta fuera de rango
 DISTANCIA = 0.05              # Parametro de control de distancia
@@ -32,7 +32,7 @@ WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/
                    "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_cuadrado.csv"
                     )
 
-# Parametros a definir por medio de sofware, definidos en 0 hasta la ejecucion del programa
+# Parametros a definir por medio de software, definidos en 0 hasta la ejecucion del programa
 OFFSET_ALTO = 0
 OFFSET_MEDIO = 0
 OFFSET_BAJO = 0
@@ -64,7 +64,7 @@ class DescentralizedPoint:
         self.trajectory_dy = 0.0
 
         # Valor de indice de punto de ruta
-        self.current_target_idx = 0
+        self.current_target_idx = OFFSET_ALTO
 
         # Clase para publicar las variables a controlar
         self.actuaction = Twist()
@@ -99,7 +99,6 @@ class DescentralizedPoint:
             #self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
             #primer_ciclo = True
 
-        self.current_target_idx = OFFSET_ALTO
 
         punto_objetivo = waypoints[self.current_target_idx]
 
