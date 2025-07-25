@@ -17,9 +17,9 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 2         # Ganancia derivativa
-KP_X_GAIN       = 1.5        # Ganancia proporcional
-KP_Y_GAIN       = 1.5 
+KV_GAIN         = 1.2         # Ganancia derivativa
+KP_X_GAIN       = 0.8        # Ganancia proporcional
+KP_Y_GAIN       = 0.8 
 tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8          # Distancia a la que el robot esta fuera de rango
 DISTANCIA = 0.05              # Parametro de control de distancia
@@ -29,7 +29,7 @@ W_ANGULAR_MAX = 2.70          # Valor de velocidad angular maxima
 
 # Direccion de archivo que contiene la ruta de la trayectoria
 WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/"
-                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_cuadrado.csv"
+                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_lemniscata.csv"
                     )
 
 # Parametros a definir por medio de software, definidos en 0 hasta la ejecucion del programa
@@ -232,6 +232,7 @@ class DescentralizedPoint:
 
         print(
             "Velocidad Izq: " + str(v[0]) + " | Velocidad Der: " + str(v[1]) + "\n" +
+            "Velocidad lineal: " + str(v_lineal) + "| Velocidad Angular: " + str(w_lineal) + "\n"
             "Trajectory X: " + str(self.trajectory_x) + " | Trajectory Y: " + str(self.trajectory_y) + "\n" +
             "Dx Trajectory: " + str(self.trajectory_dx) + " | Dy Trajectory: " + str(self.trajectory_dy) + "\n" +
             "Current X: " + str(self.current_x) + " | Current Y: " + str(self.current_y) + "\n")
