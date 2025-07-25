@@ -1,4 +1,5 @@
-#! /usr/bin/python3
+#! /usr/bin/python
+# -*- coding: utf-8 -*-
 
 ##### Librerias y tipos de mensajes #####
 
@@ -6,6 +7,7 @@
 import rospy
 import numpy as np
 import math
+import csv
 
 # Int8 es el tipo de mensaje por el que se publica el valor de PWM de los motores del robot
 from std_msgs.msg import Int8
@@ -17,18 +19,18 @@ from mecanumrob_common.msg import WheelSpeed
 wheel_base      = 0.276  # Distancia entre las ruedas (b)
 lenght_g        = 0.15     # Distancia desde el centro al frente del robot (g)
 R               = 0.0505      # Radio de las ruedas del robot
-KV_GAIN         = 2.5         # Ganancia derivativa
-KP_X_GAIN       = 0.40        # Ganancia proporcional
-KP_Y_GAIN       = 0.40 
-tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
+KV_GAIN         = 0.9         # Ganancia derivativa
+KP_X_GAIN       = 0.1        # Ganancia proporcional
+KP_Y_GAIN       = 0.1
+tiempo_ejecucion = 0.029     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8          # Distancia a la que el robot esta fuera de rango
-DISTANCIA = 0.05              # Parametro de control de distancia
+DISTANCIA = 0.4              # Parametro de control de distancia
 CONTINUIDAD = True            # Bandera que determina si una trayectoria es continua (True) o no (False)
-V_LINEAL_MAX = 130           # Valor de velocidad linear maxima en PWM
+V_LINEAL_MAX = 120           # Valor de velocidad linear maxima en PWM
 
 # Direccion de archivo que contiene la ruta de la trayectoria
-WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/"
-                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_cuadrado.csv"
+WAYPOINTS_FILE  =  ("/home/dif1/catkin_ws/src/MiniMecanum/mecanumrob_roboclaw/scripts/"
+	            "trayectoria_cuadrado.csv"
                     )
 
 # Parametros a definir por medio de sofware, definidos en 0 hasta la ejecucion del programa
@@ -38,6 +40,7 @@ OFFSET_BAJO = 0
 DISTANCIA_ALTA = 0
 DISTANCIA_MEDIA = 0
 DISTANCIA_BAJA = 0
+
 
 # Topicos
 
@@ -70,8 +73,14 @@ class Descentralized_point():
         self.trajectory_dy = 0
 
         # Indice de trayectoria
-        self.current_target_idx = 0
+        self.current_target_idx = OFFSET_ALTO
 
+	# Guardar valores de posicion del robot.
+	self.file_path = "/home/dif1/catkin_ws/src/MiniMecanum/mecanumrob_roboclaw/sensors_results/prueba3_26_6.csv"
+	with open(self.file_path, "wb") as file:
+		writer = csv.writer(file)
+		writer.writerow(["current_x", "current_y", "v_izq_PWW", "v_der_PWM"])
+	
         # Velocidades de las ruedas izquierda y derecha
         self.izq_pub = rospy.Publisher("%s/motor/SW_pwm" % self.base_name,
                                         Int8, queue_size=0)
@@ -86,6 +95,7 @@ class Descentralized_point():
     def obtener_puntos(self):
         SKIP_ROWS = 1
         DELIMITER = ","
+        WAYPOINTS_FILE  = "/home/dif1/catkin_ws/src/MiniMecanum/mecanumrob_roboclaw/scripts/trayectoria_cuadrado.csv"
         waypoints = np.loadtxt(WAYPOINTS_FILE, delimiter=DELIMITER, skiprows=SKIP_ROWS)
         return waypoints
     
@@ -110,12 +120,12 @@ class Descentralized_point():
         self.current_y += ((v_der+v_izq)/2) * math.sin(self.current_theta) * tiempo_ejecucion
 
     def obtener_trayectoria(self, waypoints):
-        global primer_ciclo
+        # global primer_ciclo
 
         # Inicializar índice objetivo solo una vez
-        if self.current_target_idx is None and not primer_ciclo:
-            self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
-            primer_ciclo = True
+        # if self.current_target_idx is None and not primer_ciclo:
+            # self.current_target_idx = self.encontrar_idx_mas_cercano(waypoints)
+            # primer_ciclo = True
 
         punto_objetivo = waypoints[self.current_target_idx]
 
@@ -161,15 +171,16 @@ class Descentralized_point():
 
         self.modificar_posicion(encoders)
 
+
         self.obtener_trayectoria(waypoints)
 
         # Encontrar sguiente punto de la trayectoria en x y y
-        next_trayectory_x = waypoints[self.current_target_idx + 1][0] # Offset para encontrar derivada
-        next_trayectory_y = waypoints[self.current_target_idx + 1][1] # Offset para encontrar derivada
+        #next_trayectory_x = waypoints[self.current_target_idx + 1][0] # Offset para encontrar derivada
+        #next_trayectory_y = waypoints[self.current_target_idx + 1][1] # Offset para encontrar derivada
 
         # Derivada de la trayectoria
-        self.trajectory_dx = (next_trayectory_x - self.trajectory_x) / tiempo_ejecucion
-        self.trajectory_dy = (next_trayectory_y - self.trajectory_y) / tiempo_ejecucion
+        self.trajectory_dx = self.trajectory_x - self.current_x
+        self.trajectory_dy = self.trajectory_y - self.current_y
 
         # Componente proporcional a la velocidad de referencia
         vel_component = KV_GAIN * np.array([[self.trajectory_dx],
@@ -185,8 +196,10 @@ class Descentralized_point():
         krp_identidad = np.array([[KP_X_GAIN, 0],
                                 [0, KP_Y_GAIN]])
 
-        e_krp = krp_identidad @ np.array([[error_x],
-                                          [error_y]])
+        e_matriz = np.array([[error_x],
+                         [error_y]])
+
+	e_krp = np.dot(krp_identidad, e_matriz)
 
         # Resultado final del control cinemático
         control_cinematico = vel_component + e_krp
@@ -201,22 +214,29 @@ class Descentralized_point():
         ])
 
         # Velocidades de referencia de las ruedas (lineales)
-        v = B @ control_cinematico
+        v = np.dot(B, control_cinematico)
 
         # Obtener velocidades de las dos ruedas en PWM
         v_izq_PWM = v[0] * 100
         v_der_PWM = v[1] * 100
 
-        # Definiendo los valores maximos de PWM para los motores obtenidos
-        if(v_izq_PWM > 130):
-            v_izq_PWM = 130
+	# Limitar las velocidades del algoritmo
 
-        if(v_der_PWM > 130):
-            v_der_PWM = 130    
+	if(v_izq_PWM > V_LINEAL_MAX):
+		v_izq_PWM = V_LINEAL_MAX
+
+	if(v_der_PWM > V_LINEAL_MAX):
+		v_der_PWM = V_LINEAL_MAX
+
+	# Escribir fila de valores de posicion X y Y
+        with open(self.file_path, "ab") as file:
+                writer = csv.writer(file)
+                writer.writerow([self.current_x, self.current_y, v_izq_PWM, v_der_PWM])
+
 
         # Imprimir los mensajes
         print(
-            "Velocidad Izq: " + str(v[0]) + " | Velocidad Der: " + str(v[1]) + "\n" +
+            "Velocidad Izq: " + str(v_izq_PWM) + " | Velocidad Der: " + str(v_der_PWM) + "\n" +
             "Trajectory X: " + str(self.trajectory_x) + " | Trajectory Y: " + str(self.trajectory_y) + "\n" +
             "Dx Trajectory: " + str(self.trajectory_dx) + " | Dy Trajectory: " + str(self.trajectory_dy) + "\n" +
             "Current X: " + str(self.current_x) + " | Current Y: " + str(self.current_y) + "\n")
@@ -226,7 +246,8 @@ class Descentralized_point():
         self.der_pub.publish(Int8(-v_der_PWM))
 
         return None
-    
+
+
 def obtener_delta(ruta_csv):
     """
     Carga la cantidad de filas que hay en el archivo de trayectoria para obtener la cantidad de filas totales
@@ -289,4 +310,13 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+        
+
+        
+
+
+
+
+        
         
