@@ -17,19 +17,19 @@ from nav_msgs.msg import Odometry
 ### Parámetros ###
 wheel_base      = 0.160  # Distancia entre las ruedas (b)
 lenght_g        = 0.138/2     # Distancia desde el centro al frente del robot (g)
-KV_GAIN         = 1.2         # Ganancia derivativa
-KP_X_GAIN       = 0.8        # Ganancia proporcional
-KP_Y_GAIN       = 0.8 
+KV_GAIN         = 0.3         # Ganancia derivativa
+KP_X_GAIN       = 0.07        # Ganancia proporcional
+KP_Y_GAIN       = 0.07 
 tiempo_ejecucion = 0.0333     # Tiempo de reiteracion
 DISTANCIA_UMBRAL = 8          # Distancia a la que el robot esta fuera de rango
-DISTANCIA = 0.05              # Parametro de control de distancia
+DISTANCIA = 0.2              # Parametro de control de distancia
 CONTINUIDAD = True            # Bandera que determina si una trayectoria es continua (True) o no (False)
-V_LINEAL_MAX = 0.20           # Valor de velocidad linear maxima
-W_ANGULAR_MAX = 2.70          # Valor de velocidad angular maxima 
+V_LINEAL_MAX = 0.15           # Valor de velocidad linear maxima
+W_ANGULAR_MAX = 2.6          # Valor de velocidad angular maxima 
 
 # Direccion de archivo que contiene la ruta de la trayectoria
 WAYPOINTS_FILE  =  ("/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/"
-                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_lemniscata.csv"
+                   "turtlebot3_gazebo/descentralized_point/trayectorias/trayectoria_reloj_arena.csv"
                     )
 
 # Parametros a definir por medio de software, definidos en 0 hasta la ejecucion del programa
@@ -216,7 +216,9 @@ class DescentralizedPoint:
 
         # Agregando limitaciones de la señal de control para prevenir errores:
         if(v_lineal > V_LINEAL_MAX): 
-            v_lineal = V_LINEAL_MAX   
+            v_lineal = V_LINEAL_MAX
+            # Agregar la nueva velocidad de la rueda izquierda y derecha para poder imprimir la nueva velocidad de las ruedas si se pasa
+            # tambien para la velocidad angular.
 
         if(w_lineal > W_ANGULAR_MAX):
             w_lineal = W_ANGULAR_MAX
@@ -251,7 +253,7 @@ def obtener_delta(ruta_csv):
     
     delta = cantidad_filas * 0.05
 
-    if delta == 0:
+    if delta < 1:
         delta = 1
         return delta
     else:
@@ -287,6 +289,8 @@ def main():
     # Obteniendo el valor de desplazamiento para obtener parametros del algoritmo.
     delta = obtener_delta(WAYPOINTS_FILE)
     definir_parametros(delta)
+
+    #pdb.set_trace()
 
     # Iniciando objeto de punto descentralizado
     rospy.init_node("descentralized_point_simulation")
