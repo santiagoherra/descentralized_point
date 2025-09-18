@@ -76,10 +76,10 @@ class Descentralized_point():
         self.current_target_idx = OFFSET_ALTO
 
 	# Guardar valores de posicion del robot.
-	self.file_path = "/home/dif1/catkin_ws/src/MiniMecanum/mecanumrob_roboclaw/sensors_results/prueba3_26_6.csv"
-	with open(self.file_path, "wb") as file:
-		writer = csv.writer(file)
-		writer.writerow(["current_x", "current_y", "v_izq_PWW", "v_der_PWM"])
+	    self.file_path = "/home/dif1/catkin_ws/src/MiniMecanum/mecanumrob_roboclaw/sensors_results/prueba3_26_6.csv"
+	    with open(self.file_path, "wb") as file:
+		    writer = csv.writer(file)
+		    writer.writerow(["current_x", "current_y", "v_lineal", "w_lineal"])
 	
         # Velocidades de las ruedas izquierda y derecha
         self.izq_pub = rospy.Publisher("%s/motor/SW_pwm" % self.base_name,
@@ -197,9 +197,9 @@ class Descentralized_point():
                                 [0, KP_Y_GAIN]])
 
         e_matriz = np.array([[error_x],
-                         [error_y]])
+                             [error_y]])
 
-	e_krp = np.dot(krp_identidad, e_matriz)
+	    e_krp = np.dot(krp_identidad, e_matriz)
 
         # Resultado final del control cinemático
         control_cinematico = vel_component + e_krp
@@ -222,16 +222,25 @@ class Descentralized_point():
 
 	# Limitar las velocidades del algoritmo
 
-	if(v_izq_PWM > V_LINEAL_MAX):
-		v_izq_PWM = V_LINEAL_MAX
+        if(v_izq_PWM > V_LINEAL_MAX):
+            v_izq_PWM = V_LINEAL_MAX
 
-	if(v_der_PWM > V_LINEAL_MAX):
-		v_der_PWM = V_LINEAL_MAX
+        if(v_der_PWM > V_LINEAL_MAX):
+            v_der_PWM = V_LINEAL_MAX
+          
+        mod_cine_direc = np.array([[1/2, 1/2],
+                        [-1/(wheel_base), 1/(wheel_base)]
+                        ])
+        
+        v_w_lineal = np.dot(mod_cine_direc, v)
+
+        v_lineal = v_w_lineal[0]
+        w_lineal = v_w_lineal[1]
 
 	# Escribir fila de valores de posicion X y Y
         with open(self.file_path, "ab") as file:
                 writer = csv.writer(file)
-                writer.writerow([self.current_x, self.current_y, v_izq_PWM, v_der_PWM])
+                writer.writerow([self.current_x, self.current_y, v_lineal, w_lineal])
 
 
         # Imprimir los mensajes
