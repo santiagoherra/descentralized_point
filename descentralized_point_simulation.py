@@ -5,6 +5,7 @@ import rospy
 import numpy as np
 import math
 import tf
+import csv
 
 import pdb
 
@@ -72,6 +73,11 @@ class DescentralizedPoint:
         # Variables de publicacion y suscripcion a topicos
         self.drive_pub = rospy.Publisher(drive_topic, Twist, queue_size=100)
         self.odom_sub = rospy.Subscriber(odom_topic, Odometry, self.punto_descentralizado, queue_size=100)
+
+        self.file_path = "/home/labautomatica05/catkin_ws/src/turtlebot3_simulations/turtlebot3_gazebo/descentralized_point/desempennos/prueba_falsa.csv"
+        with open(self.file_path, "w", newline='') as file:  # Usar "w" en lugar de "wb" en Python 3
+            writer = csv.writer(file)
+            writer.writerow(["current_x", "current_y", "v_lineal", "w_lineal"])
 
     def obtener_puntos(self):
         """
@@ -227,6 +233,11 @@ class DescentralizedPoint:
         self.actuaction.linear.x = v_lineal
 
         self.actuaction.angular.z = w_lineal
+
+        with open(self.file_path, "a", newline='') as file:  # Usa "a" en Python 3
+            writer = csv.writer(file)
+            writer.writerow([self.current_x, self.current_y, v_lineal, w_lineal])
+
 
         # Se publica el mensaje y se imprime en terminal las variables
         self.drive_pub.publish(self.actuaction)
