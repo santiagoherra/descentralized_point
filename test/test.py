@@ -27,8 +27,24 @@ class Prueba_externa():
         assert isinstance(descentralized_point_simulation. OFFSET_MEDIO, int)
         assert isinstance(descentralized_point_simulation. OFFSET_BAJO, int)
 
+        # Pruebas para saber si las distancias y offset son positivos y mayores que 0
+        assert descentralized_point_simulation.DISTANCIA_ALTA > 0
+        assert descentralized_point_simulation.DISTANCIA_MEDIA > 0
+        assert descentralized_point_simulation.DISTANCIA_BAJA > 0
 
-    def Descentralized_point():
+        assert descentralized_point_simulation.OFFSET_ALTO > 0
+        assert descentralized_point_simulation.OFFSET_MEDIO > 0
+        assert descentralized_point_simulation.OFFSET_BAJO > 0
+
+        # Verificar la distancia alta
+        assert descentralized_point_simulation.DISTANCIA_ALTA == descentralized_point_simulation.DISTANCIA
+
+
+    @pytest.fixture
+
+    def df(self):
+        definir_parametros(self.delta)
         return DescentralizedPoint()
-
+    
+    
         
