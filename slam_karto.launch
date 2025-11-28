@@ -1,0 +1,26 @@
+<launch>
+
+    <!-- Load parameters for SLAM from a YAML file -->
+    <rosparam file="$(find my_robot)/config/slam_params.yaml" command="load" />
+
+    <!-- Start the mecanum base node -->
+    <node
+        pkg="mecanum_base"
+        type="mecanum_base_node.py"
+        name="mecanum_base"
+        output="screen"
+    />
+
+    <!-- Start the RPLIDAR -->
+    <include file="$(find rplidar)/launch/rplidar.launch" />
+
+    <!-- Start SLAM Karto -->
+    <node
+        pkg="slam_karto"
+        type="slam_karto"
+        name="slam_karto"
+        output="screen"
+    />
+
+</launch>
+
