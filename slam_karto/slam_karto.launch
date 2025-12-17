@@ -1,7 +1,7 @@
 <launch>
 
     <!-- Load parameters for SLAM from a YAML file -->
-    <rosparam file="home/dif1/catkin_ws/config/config_slam_karto.yaml" command="load" />
+    <rosparam file="/home/dif1/catkin_ws/config/config_slam_karto.yaml" command="load" />
 
     <!-- Start the mecanum base node -->
     <node
