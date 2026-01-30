@@ -15,7 +15,9 @@ from rospy.numpy_msg import numpy_msg
 from std_msgs.msg import Int8, Int32, Float32
 from roboclaw.roboclaw import Roboclaw
 from mecanumrob_common.msg import EncTimed, WheelSpeed
-
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped, Quaternion
+from tf.transformations import quaternion_from_euler
 
 #--------------------------------------------------#
 #def debug_signal_handler(signal, frame):
@@ -92,6 +94,8 @@ class MecanumNode(object):
         self.pid_kd = rospy.get_param("~Kd", default=0.0)
         self.pid_ts = 1.0/60.0
         self.PWM_LIMIT = 100
+        self.odom_frame   = rospy.get_param("~odom_frame", "odom")
+        self.base_frame   = rospy.get_param("~base_frame", "base_link")
 
 
         if len(rosargs) == 2 and rosargs[1] == '1':
@@ -128,6 +132,7 @@ class MecanumNode(object):
         self.enc_pub = rospy.Publisher("encoders", EncTimed, queue_size=0)
         self.phi_pub = rospy.Publisher("wheel_speed", numpy_msg(WheelSpeed), queue_size=0)
         self.pwm_pub = rospy.Publisher("pwm", EncTimed, queue_size=0)
+        self.odom = rospy.Publisher("/odom", Odometry ,self.update_odom, queue_size = 0)
 
         # Inicializar valores
         # Inicialmente los motores estan detenidos
@@ -137,6 +142,10 @@ class MecanumNode(object):
         self.m4_pwm_cmd = 0
         self.front.ResetEncoders(self.address)
         self.back.ResetEncoders(self.address)
+
+        self.x = 0
+        self.y = 0
+        self.theta = 0
 
         self.t_n = rospy.Time.now()
         self.phi_n = np.zeros(4, dtype=np.float64)
@@ -308,6 +317,62 @@ class MecanumNode(object):
             rospy.logwarn("Roboclaw OSError: %d", e.errno)
             rospy.logdebug(e)
 
+    def update_odom(self, encoders):
+        dt = self.t_n - self.t_prev
+        if dt <= 0:
+            return
+        # Velocidad angular de la rueda izquierda y derecha
+        w_der = encoders.phi[3]
+        w_izq = - encoders.phi[2]
+
+        # Velocidad lineal de la rueda izquierda y derecha
+        v_der =  (w_der) * self.wheel_radious
+        v_izq =  (w_izq) * self.wheel_radious
+
+        v = (v_der + v_izq) / 2
+        w = (v_der - v_izq) / self.wheel_base
+
+        self.x += v * math.cos(self.theta) * dt
+        self.y += v * math.sin(self.theta) * dt
+        self.theta += w * dt
+
+         # Quaternion desde yaw
+        qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.theta)
+
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = t_now
+        tf_msg.header.frame_id = self.odom_frame
+        tf_msg.child_frame_id = self.base_frame
+        tf_msg.transform.translation.x = self.x
+        tf_msg.transform.translation.y = self.y
+        tf_msg.transform.translation.z = 0.0
+        tf_msg.transform.rotation.x = qx
+        tf_msg.transform.rotation.y = qy
+        tf_msg.transform.rotation.z = qz
+        tf_msg.transform.rotation.w = qw
+        self.tf_broadcaster.sendTransform(tf_msg)
+
+        # --- Publicar nav_msgs/Odometry ---
+        odom = Odometry()
+        odom.header.stamp = self.t_n
+        odom.header.frame_id = self.odom_frame
+        odom.child_frame_id = self.base_frame
+
+        odom.pose.pose.position.x = self.x
+        odom.pose.pose.position.y = self.y
+        odom.pose.pose.position.z = 0.0
+        odom.pose.pose.orientation.x = qx
+        odom.pose.pose.orientation.y = qy
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
+
+        odom.twist.twist.linear.x = v
+        odom.twist.twist.linear.y = 0.0
+        odom.twist.twist.angular.z = w
+
+        self.odom(odom)
+        return 
+
 
     def run(self):
         r"""Lazo principal del nodo.
@@ -334,6 +399,7 @@ class MecanumNode(object):
             	self._pub_wheel_speed()
             	self._pub_encoder_value()
             	self._pub_pwm()
+                self.update_odom(self.command_sub)
             	r_time.sleep()
             except Exception as e:
                  if rospy.is_shutdown():
