@@ -29,10 +29,15 @@ from tf.transformations import quaternion_from_euler
 #signal.signal(signal.SIGUSR1, debug_signal_handler)
 #--------------------------------------------------#
 
+# FUNCIONES EXTRA
 
 def clip(val, minval, maxval):
     r"""Acota una variable entre dos valores, p. ej. (-127,127)"""
     return max(min(val, maxval), minval)
+
+def limitar_2pi(angulo):
+    "Normalizar el angulo de [0, 2pi] para que no crezca mas de lo necesaria"
+    return angulo % (2 * math.pi)
 
 def timeit(method):
     def timed(*args, **kw):
@@ -46,6 +51,8 @@ def timeit(method):
 
         return result
     return timed
+
+# CLASE DE MECANUM_NODE
 
 class MecanumNode(object):
     r"""Nodo para una base del MecanumRob, con 2 controladores de motores Roboclaw.
@@ -335,12 +342,13 @@ class MecanumNode(object):
         self.x += v * math.cos(self.theta) * dt
         self.y += v * math.sin(self.theta) * dt
         self.theta += w * dt
+        self.theta = limitar_2pi(self.theta)
 
          # Quaternion desde yaw
         qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.theta)
 
         tf_msg = TransformStamped()
-        tf_msg.header.stamp = t_now
+        tf_msg.header.stamp = self.t_n
         tf_msg.header.frame_id = self.odom_frame
         tf_msg.child_frame_id = self.base_frame
         tf_msg.transform.translation.x = self.x
