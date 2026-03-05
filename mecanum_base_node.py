@@ -17,6 +17,7 @@ from roboclaw.roboclaw import Roboclaw
 from mecanumrob_common.msg import EncTimed, WheelSpeed
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped, Quaternion
+import tf
 from tf.transformations import quaternion_from_euler
 
 #--------------------------------------------------#
@@ -35,9 +36,9 @@ def clip(val, minval, maxval):
     r"""Acota una variable entre dos valores, p. ej. (-127,127)"""
     return max(min(val, maxval), minval)
 
-def limitar_2pi(angulo):
-    "Normalizar el angulo de [0, 2pi] para que no crezca mas de lo necesaria"
-    return angulo % (2 * math.pi)
+def normalizar_angulo(angulo):
+    """Normaliza el angulo a (-pi, pi] segun REP-103."""
+    return math.atan2(math.sin(angulo), math.cos(angulo))
 
 def timeit(method):
     def timed(*args, **kw):
@@ -103,6 +104,10 @@ class MecanumNode(object):
         self.PWM_LIMIT = 100
         self.odom_frame   = rospy.get_param("~odom_frame", "odom")
         self.base_frame   = rospy.get_param("~base_frame", "base_link")
+        self.wheel_radius = rospy.get_param("~wheel_radius", 0.0505)  # metros
+        self.wheel_base   = rospy.get_param("~wheel_base",   0.160)   # metros (distancia entre SW y SE)
+
+        self.tf_broadcaster = tf.TransformBroadcaster()
 
 
         if len(rosargs) == 2 and rosargs[1] == '1':
@@ -139,7 +144,7 @@ class MecanumNode(object):
         self.enc_pub = rospy.Publisher("encoders", EncTimed, queue_size=0)
         self.phi_pub = rospy.Publisher("wheel_speed", numpy_msg(WheelSpeed), queue_size=0)
         self.pwm_pub = rospy.Publisher("pwm", EncTimed, queue_size=0)
-        self.odom = rospy.Publisher("/odom", Odometry ,self.update_odom, queue_size = 0)
+        self.odom_pub = rospy.Publisher("/odom", Odometry, queue_size=1)
 
         # Inicializar valores
         # Inicialmente los motores estan detenidos
@@ -155,6 +160,7 @@ class MecanumNode(object):
         self.theta = 0
 
         self.t_n = rospy.Time.now()
+        self.last_odom_time = rospy.Time.now()
         self.phi_n = np.zeros(4, dtype=np.float64)
         self._w_sign = np.array([1, 1, 1, 1] , dtype=np.float64)
 
@@ -180,7 +186,6 @@ class MecanumNode(object):
 
         # Comandos para el robot
         self.command_sub = rospy.Subscriber("cmd_wheels", numpy_msg(WheelSpeed), self.cmd_wheel_callback, queue_size=1)
-
 
     def m1_pwm_callback(self, msg):
         # Verificacion de entrada
@@ -324,33 +329,42 @@ class MecanumNode(object):
             rospy.logwarn("Roboclaw OSError: %d", e.errno)
             rospy.logdebug(e)
 
-    def update_odom(self, encoders):
-        dt = self.t_n - self.t_prev
-        if dt <= 0:
+    def update_odom(self):
+        """Calcula y publica odometria diferencial (x, y, yaw) y TF odom->base_link.
+
+        Ruedas motrices: SW=phi[2] (invertida) y SE=phi[3].
+        Cinematica diferencial: robot triciciclo con bola pasiva al frente.
+        """
+        now = rospy.Time.now()
+        dt = (now - self.last_odom_time).to_sec()
+        if dt <= 0.0:
             return
-        # Velocidad angular de la rueda izquierda y derecha
-        w_der = encoders.phi[3]
-        w_izq = - encoders.phi[2]
+        self.last_odom_time = now
 
-        # Velocidad lineal de la rueda izquierda y derecha
-        v_der =  (w_der) * self.wheel_radious
-        v_izq =  (w_izq) * self.wheel_radious
+        r = self.wheel_radius
+        L = self.wheel_base
 
-        v = (v_der + v_izq) / 2
-        w = (v_der - v_izq) / self.wheel_base
+        # Velocidades angulares de las ruedas motrices [rad/s]
+        # SW esta fisicamente invertido, por eso se niega
+        w_izq = -self.phi_prime[2]   # SW (rueda izquierda)
+        w_der  =  self.phi_prime[3]  # SE (rueda derecha)
 
-        self.x += v * math.cos(self.theta) * dt
-        self.y += v * math.sin(self.theta) * dt
-        self.theta += w * dt
-        self.theta = limitar_2pi(self.theta)
+        # Cinematica directa diferencial
+        vx = (r / 2.0) * (w_der + w_izq)
+        wz = (r / L)   * (w_der - w_izq)
 
-         # Quaternion desde yaw
+        # Integracion de pose en frame odom
+        self.x     += vx * math.cos(self.theta) * dt
+        self.y     += vx * math.sin(self.theta) * dt
+        self.theta  = normalizar_angulo(self.theta + wz * dt)
+
         qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.theta)
 
+        # --- TF: odom -> base_link ---
         tf_msg = TransformStamped()
-        tf_msg.header.stamp = self.t_n
+        tf_msg.header.stamp    = now
         tf_msg.header.frame_id = self.odom_frame
-        tf_msg.child_frame_id = self.base_frame
+        tf_msg.child_frame_id  = self.base_frame
         tf_msg.transform.translation.x = self.x
         tf_msg.transform.translation.y = self.y
         tf_msg.transform.translation.z = 0.0
@@ -360,26 +374,22 @@ class MecanumNode(object):
         tf_msg.transform.rotation.w = qw
         self.tf_broadcaster.sendTransform(tf_msg)
 
-        # --- Publicar nav_msgs/Odometry ---
+        # --- nav_msgs/Odometry ---
         odom = Odometry()
-        odom.header.stamp = self.t_n
+        odom.header.stamp    = now
         odom.header.frame_id = self.odom_frame
-        odom.child_frame_id = self.base_frame
-
-        odom.pose.pose.position.x = self.x
-        odom.pose.pose.position.y = self.y
-        odom.pose.pose.position.z = 0.0
+        odom.child_frame_id  = self.base_frame
+        odom.pose.pose.position.x    = self.x
+        odom.pose.pose.position.y    = self.y
+        odom.pose.pose.position.z    = 0.0
         odom.pose.pose.orientation.x = qx
         odom.pose.pose.orientation.y = qy
         odom.pose.pose.orientation.z = qz
         odom.pose.pose.orientation.w = qw
-
-        odom.twist.twist.linear.x = v
-        odom.twist.twist.linear.y = 0.0
-        odom.twist.twist.angular.z = w
-
-        self.odom(odom)
-        return 
+        odom.twist.twist.linear.x    = vx
+        odom.twist.twist.linear.y    = 0.0
+        odom.twist.twist.angular.z   = wz
+        self.odom_pub.publish(odom)
 
 
     def run(self):
@@ -399,29 +409,26 @@ class MecanumNode(object):
             self.t_n = rospy.Time.now()
 
             try:
-            	self.get_encoder_speed()
-            	self.get_encoder_value()
-            	self.update_wheel_speed()
-            	self.get_pwm_output_pid()
-            	self.send_pwm_cmd(self.PID_mode)
-            	self._pub_wheel_speed()
-            	self._pub_encoder_value()
-            	self._pub_pwm()
-                self.update_odom(self.command_sub)
-            	r_time.sleep()
+                self.get_encoder_speed()
+                self.get_encoder_value()
+                self.update_wheel_speed()
+                self.get_pwm_output_pid()
+                self.send_pwm_cmd(self.PID_mode)
+                self._pub_wheel_speed()
+                self._pub_encoder_value()
+                self._pub_pwm()
+                self.update_odom()
+                r_time.sleep()
             except Exception as e:
-                 if rospy.is_shutdown():
-                     rospy.logwarn("Exception caught while shutting down")
-                     rospy.logwarn(str(e))
-                     self.__emergency_stop()
-            
-                 else:
-                     rospy.logerr("Unhandled exception %s" % type(e))
-                     rospy.logerr(e.args)
-                     rospy.logerr(e.message)
-                     traceback.print_exc()
-                     pass
-                     #raise e
+                if rospy.is_shutdown():
+                    rospy.logwarn("Exception caught while shutting down")
+                    rospy.logwarn(str(e))
+                    self.__emergency_stop()
+                else:
+                    rospy.logerr("Unhandled exception %s" % type(e))
+                    rospy.logerr(e.args)
+                    rospy.logerr(e.message)
+                    traceback.print_exc()
 
     def _pub_encoder_value(self):
         """Publica el valor (raw) de los encoders"""
@@ -470,7 +477,7 @@ class MecanumNode(object):
         rospy.sleep(0.5)
 
     def shutdown(self):
-	"""Apaga el nodo"""
+        """Apaga el nodo"""
 
         rospy.loginfo("Shutting down")
 
