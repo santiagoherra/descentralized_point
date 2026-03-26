@@ -1,3 +1,12 @@
+
+odom_frame: odom
+map_frame: map
+base_frame: base_footprint
+scan_topic: /scan
+mode: mapping
+
+throttle_scans: 1
+map_update_interval: 5.0
 loop_match_minimum_chain_size: 10
 angle_variance_penalty: 0.349
 correlation_search_space_dimension: 0.3
