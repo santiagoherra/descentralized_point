@@ -1,12 +1,12 @@
-<robot name= "mecanum_base">
+<robot name= "mecanumRob_base">
     
     <link name="base_link"/>
 
-    <link name="scan"/>
+    <link name="laser"/>
 
-    <joint name="base_scan" type="fixed">
+    <joint name="base_laser_joint" type="fixed">
         <parent link="base_link"/>
-        <child link="scan"/>
+        <child link="laser"/>
         <origin xyz="0.06 0.00 0.08" rpy="0 0 0"/>
     </joint>
 </robot>

@@ -1,8 +1,5 @@
 <launch>
 
-    <!-- Load parameters for SLAM from a YAML file -->
-    <rosparam file="/home/dif1/catkin_ws/config/config_slam_karto.yaml" command="load" />
-
     <!-- Start the mecanum base node -->
     <node
         pkg="mecanumrob_roboclaw"
@@ -20,18 +17,20 @@
     />
 
     <!-- Start the RPLIDAR -->
-    <include file="home/dif1/catkin_ws/src/rplidar_ros/launch/rplidar.launch" />
+    <include file="/home/dif1/catkin_ws/src/rplidar_ros/launch/rplidar.launch" />
 
-    <!-- Start SLAM Karto -->
     <node
         pkg="slam_karto"
         type="slam_karto"
         name="slam_karto"
-        output="screen"
-    />
+        output="screen">
+        <rosparam file="/home/dif1/catkin_ws/config/config_slam_karto.yaml" command="load" />
+        <remap from="scan" to="/scan" />
+    </node>
 
-    <param name="mecanum_base" textfile="$~/catkin_ws/config/urdf/mecanum_base.urdf" />
-
-    <node pkg="robot_state_publisher" type= "robot_state_publisher" name="robot_state_publisher" />
+    <node pkg="tf2_ros"
+      type="static_transform_publisher"
+      name="base_to_scan_tf"
+      args="0.06 0.0 0.08 0 0 0 base_link laser" />
 
 </launch>
