@@ -18,8 +18,9 @@ from roboclaw.roboclaw import Roboclaw
 from mecanumrob_common.msg import EncTimed, WheelSpeed
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped, Quaternion
+from sensor_msgs.msg import Imu
 import tf2_ros
-from tf.transformations import quaternion_from_euler
+from tf.transformations import quaternion_from_euler, euler_from_quaternion
 
 #--------------------------------------------------#
 #def debug_signal_handler(signal, frame):
@@ -107,6 +108,11 @@ class MecanumNode(object):
         self.base_frame   = rospy.get_param("~base_frame", "base_link")
         self.wheel_radius = rospy.get_param("~wheel_radius", 0.0505)  # metros
         self.wheel_base   = rospy.get_param("~wheel_base",   0.160)   # metros (distancia entre SW y SE)
+        self.imu_topic = rospy.get_param("~imu_topic", "/imu/data")
+        self.use_imu_yaw_rate = rospy.get_param("~use_imu_yaw_rate", True)
+        self.use_imu_orientation = rospy.get_param("~use_imu_orientation", False)
+        self.imu_timeout = rospy.get_param("~imu_timeout", 0.2)  # s
+        self.imu_wz_blend = rospy.get_param("~imu_wz_blend", 0.5)  # 0.0 solo encoder, 1.0 solo IMU
 
         self.tf_broadcaster = tf2_ros.TransformBroadcaster()
 
@@ -159,6 +165,8 @@ class MecanumNode(object):
         self.x = 0
         self.y = 0
         self.theta = 0
+        self.imu_msg = None
+        self.imu_stamp = rospy.Time(0)
 
         self.t_n = rospy.Time.now()
         self.last_odom_time = rospy.Time.now()
@@ -187,6 +195,7 @@ class MecanumNode(object):
 
         # Comandos para el robot
         self.command_sub = rospy.Subscriber("cmd_wheels", numpy_msg(WheelSpeed), self.cmd_wheel_callback, queue_size=1)
+        self.imu_sub = rospy.Subscriber(self.imu_topic, Imu, self.imu_callback, queue_size=1)
 
     def m1_pwm_callback(self, msg):
         # Verificacion de entrada
@@ -214,6 +223,11 @@ class MecanumNode(object):
         """
         self.phi_prime_ref = self._w_sign * np.clip(msg.phi, -self.w_max, self.w_max)
         rospy.logdebug_throttle(2, "Wheel commands received: %.2f, %.2f, %.2f, %.2f" % (msg.phi[0], msg.phi[1], msg.phi[2], msg.phi[3]))
+
+    def imu_callback(self, msg):
+        """Guarda la última medición IMU para odometría."""
+        self.imu_msg = msg
+        self.imu_stamp = rospy.Time.now()
 
 
     def get_encoder_speed(self):
@@ -358,14 +372,26 @@ class MecanumNode(object):
         w_izq = -self.phi_prime[2]   # SW (rueda izquierda)
         w_der  =  self.phi_prime[3]  # SE (rueda derecha)
 
-        # Cinematica directa diferencial
+        # Cinematica directa diferencial por ruedas
         vx = (r / 2.0) * (w_der + w_izq)
-        wz = (r / L)   * (w_der - w_izq)
+        wz_wheels = (r / L) * (w_der - w_izq)
+        wz = wz_wheels
+
+        imu_fresh = (self.imu_msg is not None) and ((now - self.imu_stamp).to_sec() <= self.imu_timeout)
+        if imu_fresh and self.use_imu_yaw_rate:
+            wz_imu = self.imu_msg.angular_velocity.z
+            alpha = clip(self.imu_wz_blend, 0.0, 1.0)
+            wz = (1.0 - alpha) * wz_wheels + alpha * wz_imu
 
         # Integracion de pose en frame odom
         self.x     += vx * math.cos(self.theta) * dt
         self.y     += vx * math.sin(self.theta) * dt
-        self.theta  = normalizar_angulo(self.theta + wz * dt)
+        if imu_fresh and self.use_imu_orientation:
+            q = self.imu_msg.orientation
+            _, _, yaw_imu = euler_from_quaternion([q.x, q.y, q.z, q.w])
+            self.theta = normalizar_angulo(yaw_imu)
+        else:
+            self.theta = normalizar_angulo(self.theta + wz * dt)
 
         qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.theta)
 
@@ -506,6 +532,8 @@ class MecanumNode(object):
 
         if hasattr(self, "command_sub"):
             self.command_sub.unregister()
+        if hasattr(self, "imu_sub"):
+            self.imu_sub.unregister()
 
         self.pwm_output = np.zeros(4)
         self.m1_pwm_cmd = 0
@@ -542,5 +570,3 @@ if __name__ == "__main__":
 
 
     rospy.loginfo("Exiting")
-
-
