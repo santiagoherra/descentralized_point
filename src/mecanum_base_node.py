@@ -6,6 +6,7 @@ import rospy
 import numpy as np
 import math
 import traceback
+import time
 
 
 from serial import SerialException
@@ -258,6 +259,8 @@ class MecanumNode(object):
         # tiempo haciendolo no bloqueante, habria que cambiar el paquete roboclaw
         # y meterse con el uso de Serial. O tambien haciendo un hilo que se encargue
         # de la comunicacion serial.
+
+        inicio = time.perf_counter()
         try:
             enc_m1 = self.front.ReadEncM2(self.address)
             enc_m2 = self.front.ReadEncM1(self.address)
@@ -267,8 +270,14 @@ class MecanumNode(object):
             rospy.logwarn("Roboclaw OSError: %d", e.errno)
             rospy.logdebug(e)
 
-        self.enc_n = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
+        self.enc_prime_n = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
+        # Copia (no se sabe porque aun)
+        self.enc_n = self.enc_prime_n
 
+        fin = time.perf_counter()
+
+        # Imprimir duracion de lectura de encoders
+        print(f"inicio: {inicio}, fin: {fin}, duracion: {fin - inicio}")
 
     def update_wheel_speed(self):
         """ Calcula la velocidad angular de las ruedas.
@@ -407,9 +416,10 @@ class MecanumNode(object):
 
             self.t_prev = self.t_n
             self.t_n = rospy.Time.now()
+            inicio = time.perf_counter()
 
             try:
-                self.get_encoder_speed()
+                #self.get_encoder_speed() Se elimina porque la funciona es igual a self.get_encoder_value
                 self.get_encoder_value()
                 self.update_wheel_speed()
                 self.get_pwm_output_pid()
@@ -418,6 +428,9 @@ class MecanumNode(object):
                 self._pub_encoder_value()
                 self._pub_pwm()
                 self.update_odom()
+                fin = time.perf_counter()
+                # Imprimiendo el tiempo de loop del ciclo para verificar 60hz
+                print(f"Inicio: {inicio}, fin:{fin}, duracion: {fin - inicio}")
                 r_time.sleep()
             except Exception as e:
                 if rospy.is_shutdown():
