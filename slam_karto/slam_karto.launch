@@ -33,4 +33,14 @@
       name="base_to_scan_tf"
       args="0.06 0.0 0.08 0 0 0 base_link laser" />
 
+    <!-- Lanzando driver de imu -->
+
+    <include file="../src/imu.launch" />
+
+    <!-- Lanzando nodo intermediario para la IMU-->
+    <node pkg="imu_phidget_node"
+          type="imu_phiget_node"
+          name="imu_phiget_node"
+          output="screen"  />
+
 </launch>
