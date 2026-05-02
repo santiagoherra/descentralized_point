@@ -42,6 +42,13 @@ def normalizar_angulo(angulo):
     """Normaliza el angulo a (-pi, pi] segun REP-103."""
     return math.atan2(math.sin(angulo), math.cos(angulo))
 
+def normalizar_angulo_2pi(angulo):
+    """Normaliza el angulo a [0, 2*pi)."""
+    angulo = angulo % (2.0 * math.pi)
+    if angulo < 0.0:
+        angulo += 2.0 * math.pi
+    return angulo
+
 def timeit(method):
     def timed(*args, **kw):
 
@@ -377,6 +384,7 @@ class MecanumNode(object):
         wz_wheels = (r / L) * (w_der - w_izq)
         wz = wz_wheels
 
+        # Aplicando pesos a las velocidades angulares
         imu_fresh = (self.imu_msg is not None) and ((now - self.imu_stamp).to_sec() <= self.imu_timeout)
         if imu_fresh and self.use_imu_yaw_rate:
             wz_imu = self.imu_msg.angular_velocity.z
@@ -386,12 +394,17 @@ class MecanumNode(object):
         # Integracion de pose en frame odom
         self.x     += vx * math.cos(self.theta) * dt
         self.y     += vx * math.sin(self.theta) * dt
+        theta_pred = normalizar_angulo(self.theta + wz * dt)
         if imu_fresh and self.use_imu_orientation:
             q = self.imu_msg.orientation
             _, _, yaw_imu = euler_from_quaternion([q.x, q.y, q.z, q.w])
-            self.theta = normalizar_angulo(yaw_imu)
+            alpha = clip(self.imu_wz_blend, 0.0, 1.0)
+            theta_pred_2pi = normalizar_angulo_2pi(theta_pred)
+            yaw_imu_2pi = normalizar_angulo_2pi(yaw_imu)
+            theta_blend = (1.0 - alpha) * theta_pred_2pi + alpha * yaw_imu_2pi
+            self.theta = normalizar_angulo(theta_blend)
         else:
-            self.theta = normalizar_angulo(self.theta + wz * dt)
+            self.theta = theta_pred
 
         qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.theta)
 
