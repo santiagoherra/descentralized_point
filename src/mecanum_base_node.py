@@ -7,6 +7,7 @@ import numpy as np
 import math
 import traceback
 import time
+import threading
 
 
 from serial import SerialException
@@ -180,6 +181,11 @@ class MecanumNode(object):
         self.t_n = rospy.Time.now()
         self.last_odom_time = rospy.Time.now()
         self.phi_n = np.zeros(4, dtype=np.float64)
+        self.enc_n = np.zeros(4, dtype=np.int32)
+        self.enc_prime_n = np.zeros(4, dtype=np.int32)
+        self.enc_lock = threading.Lock()
+        self.encoder_thread_rate = rospy.get_param("~encoder_thread_rate", 120.0)
+        self.encoder_thread = None
         self._w_sign = np.array([1, 1, 1, 1] , dtype=np.float64)
 
         # Estados para el controlador PID de velocidad
@@ -292,8 +298,6 @@ class MecanumNode(object):
     def get_encoder_value(self):
         r"""Lee los encoders y guarda su valor en :attr:`enc_n`
         """
-
-        inicio = time.time()
         try:
             enc_m1 = self.front.ReadEncM2(self.address)
             enc_m2 = self.front.ReadEncM1(self.address)
@@ -302,15 +306,22 @@ class MecanumNode(object):
         except OSError as e:
             rospy.logwarn("Roboclaw OSError: %d", e.errno)
             rospy.logdebug(e)
+            return False
 
-        self.enc_prime_n = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
-        # Copia (no se sabe porque aun)
-        self.enc_n = self.enc_prime_n
+        enc_vals = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
+        with self.enc_lock:
+            self.enc_prime_n = enc_vals
+            # Copia (no se sabe porque aun)
+            self.enc_n = enc_vals.copy()
+        return True
 
-        fin = time.time()
-
-        # Imprimir duracion de lectura de encoders
-        rospy.loginfo("Lectura encoder: inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
+    def encoder_read_loop(self):
+        """Lazo dedicado a lectura de encoders."""
+        rate_hz = max(float(self.encoder_thread_rate), 1.0)
+        enc_rate = rospy.Rate(rate_hz)
+        while not rospy.is_shutdown():
+            self.get_encoder_value()
+            enc_rate.sleep()
 
     def update_wheel_speed(self):
         """ Calcula la velocidad angular de las ruedas.
@@ -322,7 +333,9 @@ class MecanumNode(object):
 
         donde :math:`Q_i` es la lectura i-ésima de los encoders de cuadratura del Roboclaw.
         """
-        self.phi_prime = self.enc_prime_n*2.0*math.pi/self.ppv
+        with self.enc_lock:
+            enc_snapshot = self.enc_prime_n.copy()
+        self.phi_prime = enc_snapshot * 2.0 * math.pi / self.ppv
 
     def get_pwm_output_pid(self):
         """Aplica el lazo de control PID."""
@@ -458,6 +471,9 @@ class MecanumNode(object):
         """
 
         rospy.loginfo("Starting motor drive")
+        self.encoder_thread = threading.Thread(target=self.encoder_read_loop)
+        self.encoder_thread.daemon = True
+        self.encoder_thread.start()
 
         r_time = rospy.Rate(60)
 
@@ -468,8 +484,6 @@ class MecanumNode(object):
             inicio = time.time()
 
             try:
-                #self.get_encoder_speed() Se elimina porque la funciona es igual a self.get_encoder_value
-                self.get_encoder_value()
                 self.update_wheel_speed()
                 self.get_pwm_output_pid()
                 self.send_pwm_cmd(self.PID_mode)
@@ -498,7 +512,9 @@ class MecanumNode(object):
         msg = EncTimed()
         msg.header.frame_id = self.frame_id
         msg.header.stamp = self.t_n
-        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = self.enc_n
+        with self.enc_lock:
+            enc_snapshot = self.enc_n.copy()
+        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = enc_snapshot
         self.enc_pub.publish(msg)
 
     def _pub_wheel_speed(self):

@@ -1,0 +1,35 @@
+<launch>
+  <!-- Base mecanum + driver IMU Phidget -->
+
+  <!-- Parametros de fusion encoder/IMU para mecanum_base -->
+  <arg name="imu_alpha" default="0.5" />
+  <arg name="imu_timeout" default="0.2" />
+  <arg name="use_imu_yaw_rate" default="true" />
+  <arg name="use_imu_orientation" default="true" />
+  <arg name="encoder_thread_rate" default="120.0" />
+
+  <!-- Driver IMU Phidget (desde paquete instalado en la Raspberry) -->
+  <include file="$(find phidgets_imu)/launch/imu.launch" />
+
+  <!-- Llamada al servicio de calibracion de la IMU del driver -->
+  <node
+      pkg="rosservice"
+      type="rosservice"
+      name="imu_calibrate_once"
+      args="call /imu/calibrate"
+      output="screen" />
+
+  <!-- Nodo base -->
+  <node
+      pkg="mecanumrob_roboclaw"
+      type="mecanum_base_node.py"
+      name="mecanum_base"
+      output="screen">
+    <param name="imu_topic" value="/imu/data" />
+    <param name="imu_alpha" value="$(arg imu_alpha)" />
+    <param name="imu_timeout" value="$(arg imu_timeout)" />
+    <param name="use_imu_yaw_rate" value="$(arg use_imu_yaw_rate)" />
+    <param name="use_imu_orientation" value="$(arg use_imu_orientation)" />
+    <param name="encoder_thread_rate" value="$(arg encoder_thread_rate)" />
+  </node>
+</launch>
