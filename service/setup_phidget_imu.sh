@@ -1,2 +1,2 @@
-curl -fsSL https://www.phidgets.com/downloads/setup_linux | bash -
-apt install -y libphidget22
+curl -fsSL https://www.phidgets.com/downloads/setup_linux | sudo -E bash -
+sudo apt install -y libphidget22

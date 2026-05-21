@@ -351,7 +351,7 @@ class MecanumNode(object):
         fin = time.perf_counter()
 
         # Imprimir duracion de lectura de encoders
-        print(f"inicio: {inicio}, fin: {fin}, duracion: {fin - inicio}")
+        rospy.loginfo("inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
 
     def update_wheel_speed(self):
         """ Calcula la velocidad angular de las ruedas.
@@ -520,7 +520,7 @@ class MecanumNode(object):
                 self.update_odom()
                 fin = time.perf_counter()
                 # Imprimiendo el tiempo de loop del ciclo para verificar 60hz
-                print(f"Inicio: {inicio}, fin:{fin}, duracion: {fin - inicio}")
+                rospy.loginfo("Inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
                 r_time.sleep()
             except Exception as e:
                 if rospy.is_shutdown():

@@ -38,9 +38,24 @@
     <include file="../src/imu.launch" />
 
     <!-- Lanzando nodo intermediario para la IMU-->
-    <node pkg="imu_phidget_node"
+    <!-- <node pkg="imu_phidget_node"
           type="imu_phiget_node"
           name="imu_phiget_node"
-          output="screen"  />
+          output="screen"  /> -->
+
+    <node pkg="imu_filter_madgwick"
+      type="imu_filter_node"
+      name="imu_filter_madgwick"
+      output="screen">
+
+        <param name="use_mag" value="false"/>
+        <param name="publish_tf" value="false"/>
+        <param name="world_frame" value="enu"/>
+        <param name="gain" value="0.1"/>
+
+        <remap from="imu/data_raw" to="/imu/data_raw"/>
+        <remap from="imu/data" to="/imu/data"/>
+
+    </node>
 
 </launch>
