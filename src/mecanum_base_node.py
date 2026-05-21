@@ -42,12 +42,13 @@ def normalizar_angulo(angulo):
     """Normaliza el angulo a (-pi, pi] segun REP-103."""
     return math.atan2(math.sin(angulo), math.cos(angulo))
 
-def normalizar_angulo_2pi(angulo):
-    """Normaliza el angulo a [0, 2*pi)."""
-    angulo = angulo % (2.0 * math.pi)
-    if angulo < 0.0:
-        angulo += 2.0 * math.pi
-    return angulo
+def blend_angle_weighted(angle_a, angle_b, weight_a):
+    """Mezcla angular robusta a wrap-around usando promedio vectorial en S1."""
+    weight_a = clip(weight_a, 0.0, 1.0)
+    weight_b = 1.0 - weight_a
+    x = weight_a * math.cos(angle_a) + weight_b * math.cos(angle_b)
+    y = weight_a * math.sin(angle_a) + weight_b * math.sin(angle_b)
+    return normalizar_angulo(math.atan2(y, x))
 
 def timeit(method):
     def timed(*args, **kw):
@@ -119,7 +120,7 @@ class MecanumNode(object):
         self.use_imu_yaw_rate = rospy.get_param("~use_imu_yaw_rate", True)
         self.use_imu_orientation = rospy.get_param("~use_imu_orientation", False)
         self.imu_timeout = rospy.get_param("~imu_timeout", 0.2)  # s
-        self.imu_wz_blend = rospy.get_param("~imu_wz_blend", 0.5)  # 0.0 solo encoder, 1.0 solo IMU
+        self.imu_alpha = rospy.get_param("~imu_alpha", 0.5)  # alpha: 1.0 solo encoder, 0.0 solo IMU
 
         self.tf_broadcaster = tf2_ros.TransformBroadcaster()
 
@@ -174,6 +175,7 @@ class MecanumNode(object):
         self.theta = 0
         self.imu_msg = None
         self.imu_stamp = rospy.Time(0)
+        self.imu_yaw_offset = None
 
         self.t_n = rospy.Time.now()
         self.last_odom_time = rospy.Time.now()
@@ -235,6 +237,57 @@ class MecanumNode(object):
         """Guarda la última medición IMU para odometría."""
         self.imu_msg = msg
         self.imu_stamp = rospy.Time.now()
+        if self.imu_yaw_offset is None:
+            yaw_imu = self._get_imu_yaw_if_valid(msg)
+            if yaw_imu is not None:
+                # Referencia inicial para que el yaw IMU arranque en 0 rad.
+                self.imu_yaw_offset = yaw_imu
+                rospy.loginfo("IMU yaw offset inicializado: %.4f rad", self.imu_yaw_offset)
+
+    def _is_imu_yaw_rate_valid(self, now):
+        """Verifica si la IMU es usable para fusionar velocidad angular Z."""
+        if self.imu_msg is None:
+            return False
+        if (now - self.imu_stamp).to_sec() > self.imu_timeout:
+            return False
+
+        wz_imu = self.imu_msg.angular_velocity.z
+        if not np.isfinite(wz_imu):
+            return False
+
+        # En sensor_msgs/Imu, -1 en covarianza indica que la medicion no es confiable.
+        wz_cov = self.imu_msg.angular_velocity_covariance[8]
+        if np.isfinite(wz_cov) and wz_cov < 0.0:
+            return False
+        return True
+
+    def _get_imu_yaw_if_valid(self, msg):
+        """Retorna yaw de IMU si la orientacion es valida, en otro caso None."""
+        q = msg.orientation
+        q_arr = np.array([q.x, q.y, q.z, q.w], dtype=np.float64)
+        if not np.all(np.isfinite(q_arr)):
+            return None
+        if np.linalg.norm(q_arr) < 1e-9:
+            return None
+
+        orient_cov = msg.orientation_covariance[8]
+        if np.isfinite(orient_cov) and orient_cov < 0.0:
+            return None
+
+        _, _, yaw_imu = euler_from_quaternion(q_arr.tolist())
+        if not np.isfinite(yaw_imu):
+            return None
+        return normalizar_angulo(yaw_imu)
+
+    def _is_imu_orientation_valid(self, now):
+        """Verifica si la orientacion IMU es usable para fusionar theta."""
+        if self.imu_msg is None:
+            return False
+        if (now - self.imu_stamp).to_sec() > self.imu_timeout:
+            return False
+        if self.imu_yaw_offset is None:
+            return False
+        return True
 
 
     def get_encoder_speed(self):
@@ -384,25 +437,23 @@ class MecanumNode(object):
         wz_wheels = (r / L) * (w_der - w_izq)
         wz = wz_wheels
 
-        # Aplicando pesos a las velocidades angulares
-        imu_fresh = (self.imu_msg is not None) and ((now - self.imu_stamp).to_sec() <= self.imu_timeout)
-        if imu_fresh and self.use_imu_yaw_rate:
+        # Aplicando pesos a las velocidades angulares:
+        # wz = alpha * wz_encoder + (1 - alpha) * wz_imu
+        imu_yaw_rate_valid = self.use_imu_yaw_rate and self._is_imu_yaw_rate_valid(now)
+        if imu_yaw_rate_valid:
             wz_imu = self.imu_msg.angular_velocity.z
-            alpha = clip(self.imu_wz_blend, 0.0, 1.0)
-            wz = (1.0 - alpha) * wz_wheels + alpha * wz_imu
+            wz = self.imu_alpha * wz_wheels + (1.0 - self.imu_alpha) * wz_imu
 
         # Integracion de pose en frame odom
         self.x     += vx * math.cos(self.theta) * dt
         self.y     += vx * math.sin(self.theta) * dt
         theta_pred = normalizar_angulo(self.theta + wz * dt)
-        if imu_fresh and self.use_imu_orientation:
-            q = self.imu_msg.orientation
-            _, _, yaw_imu = euler_from_quaternion([q.x, q.y, q.z, q.w])
-            alpha = clip(self.imu_wz_blend, 0.0, 1.0)
-            theta_pred_2pi = normalizar_angulo_2pi(theta_pred)
-            yaw_imu_2pi = normalizar_angulo_2pi(yaw_imu)
-            theta_blend = (1.0 - alpha) * theta_pred_2pi + alpha * yaw_imu_2pi
-            self.theta = normalizar_angulo(theta_blend)
+        yaw_imu = self._get_imu_yaw_if_valid(self.imu_msg) if self.imu_msg is not None else None
+        imu_orientation_valid = self.use_imu_orientation and self._is_imu_orientation_valid(now) and (yaw_imu is not None)
+        if imu_orientation_valid:
+            yaw_imu_rel = normalizar_angulo(yaw_imu - self.imu_yaw_offset)
+            # Misma semantica que en wz: alpha encoder, (1-alpha) IMU.
+            self.theta = blend_angle_weighted(theta_pred, yaw_imu_rel, self.imu_alpha)
         else:
             self.theta = theta_pred
 
