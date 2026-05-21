@@ -289,52 +289,11 @@ class MecanumNode(object):
             return False
         return True
 
-
-    def get_encoder_speed(self):
-        r"""Lee las velocidades de los encoders.
-        Los valores se dan en cuentas por segundo, en :attr:`enc_prime_n`
-        """
-
-        # TODO: La lectura parece hacerse de forma bloqueante, por lo que está
-        # durando en promedio 12.3174 ms. Se podria mejorar considerablemente el
-        # tiempo haciendolo no bloqueante, habria que cambiar el paquete roboclaw
-        # y meterse con el uso de Serial. O tambien haciendo un hilo que se encargue
-        # de la comunicacion serial.
-        try:
-            enc_m1 = self.front.ReadSpeedM2(self.address)
-            enc_m2 = self.front.ReadSpeedM1(self.address)
-            enc_m3 = self.back.ReadSpeedM1(self.address)
-            enc_m4 = self.back.ReadSpeedM2(self.address)
-        except OSError as e:
-            rospy.logwarn("Roboclaw OSError: %d", e.errno)
-            rospy.logdebug(e)
-
-        #self.t_prev = self.t_n
-        #self.t_n = rospy.Time.now()
-
-        # self.phi_prev = self.phi_n
-        # self.phi_n = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
-
-        # self.enc_prime_prev = self.enc_prime_n
-        self.enc_prime_n = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
-
-        # norm = np.abs(self.enc_prime_n - self.enc_prime_prev)
-        # for x in norm:
-        #     if x > 7000:
-        #         rospy.logerr("Unexpected speed values detected!")
-        #         rospy.logerr(norm)
-
     def get_encoder_value(self):
         r"""Lee los encoders y guarda su valor en :attr:`enc_n`
         """
 
-        # TODO: La lectura parece hacerse de forma bloqueante, por lo que está
-        # durando en promedio 12.3174 ms. Se podria mejorar considerablemente el
-        # tiempo haciendolo no bloqueante, habria que cambiar el paquete roboclaw
-        # y meterse con el uso de Serial. O tambien haciendo un hilo que se encargue
-        # de la comunicacion serial.
-
-        inicio = time.perf_counter()
+        inicio = time.time()
         try:
             enc_m1 = self.front.ReadEncM2(self.address)
             enc_m2 = self.front.ReadEncM1(self.address)
@@ -348,10 +307,10 @@ class MecanumNode(object):
         # Copia (no se sabe porque aun)
         self.enc_n = self.enc_prime_n
 
-        fin = time.perf_counter()
+        fin = time.time()
 
         # Imprimir duracion de lectura de encoders
-        rospy.loginfo("inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
+        rospy.loginfo("Lectura encoder: inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
 
     def update_wheel_speed(self):
         """ Calcula la velocidad angular de las ruedas.
@@ -506,7 +465,7 @@ class MecanumNode(object):
 
             self.t_prev = self.t_n
             self.t_n = rospy.Time.now()
-            inicio = time.perf_counter()
+            inicio = time.time()
 
             try:
                 #self.get_encoder_speed() Se elimina porque la funciona es igual a self.get_encoder_value
@@ -518,9 +477,9 @@ class MecanumNode(object):
                 self._pub_encoder_value()
                 self._pub_pwm()
                 self.update_odom()
-                fin = time.perf_counter()
+                fin = time.time()
                 # Imprimiendo el tiempo de loop del ciclo para verificar 60hz
-                rospy.loginfo("Inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
+                rospy.loginfo("Ciclo Completo: Inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
                 r_time.sleep()
             except Exception as e:
                 if rospy.is_shutdown():
