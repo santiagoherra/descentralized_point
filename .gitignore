@@ -24,3 +24,6 @@ __pycache__/
 *.world
 *.db
 gazebo_ros/
+
+#Datos
+*.csv

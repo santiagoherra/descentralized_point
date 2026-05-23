@@ -186,6 +186,9 @@ class MecanumNode(object):
         self.enc_lock = threading.Lock()
         self.encoder_thread_rate = rospy.get_param("~encoder_thread_rate", 120.0)
         self.encoder_thread = None
+        self.pwm_thread_rate = rospy.get_param("~pwm_thread_rate", 120.0)
+        self.pwm_thread = None
+        self.pwm_lock = threading.Lock()
         self._w_sign = np.array([1, 1, 1, 1] , dtype=np.float64)
 
         # Estados para el controlador PID de velocidad
@@ -214,22 +217,26 @@ class MecanumNode(object):
 
     def m1_pwm_callback(self, msg):
         # Verificacion de entrada
-        self.m1_pwm_cmd = clip(msg.data, -127, 127)
+        with self.pwm_lock:
+            self.m1_pwm_cmd = clip(msg.data, -127, 127)
         #rospy.logdebug("M1 PWM command = %d", self.m1_pwm_cmd)
 
     def m2_pwm_callback(self, msg):
         # Verificacion de entrada
-        self.m2_pwm_cmd = clip(msg.data, -127, 127)
+        with self.pwm_lock:
+            self.m2_pwm_cmd = clip(msg.data, -127, 127)
         #rospy.logdebug("M2 PWM command = %d", self.m2_pwm_cmd)
 
     def m3_pwm_callback(self, msg):
         # Verificacion de entrada
-        self.m3_pwm_cmd = clip(msg.data, -127, 127)
+        with self.pwm_lock:
+            self.m3_pwm_cmd = clip(msg.data, -127, 127)
         #rospy.logdebug("M3 PWM command = %d", self.m3_pwm_cmd)
 
     def m4_pwm_callback(self, msg):
         # Verificacion de entrada
-        self.m4_pwm_cmd = clip(msg.data, -127, 127)
+        with self.pwm_lock:
+            self.m4_pwm_cmd = clip(msg.data, -127, 127)
         #rospy.logdebug("M4 PWM command = %d", self.m4_pwm_cmd)
 
     def cmd_wheel_callback(self, msg):
@@ -350,39 +357,48 @@ class MecanumNode(object):
         self.pwm_output = np.clip(np.matmul(H, self.pid_coef), -self.PWM_LIMIT, self.PWM_LIMIT)
 
     #@timeit
-    def send_pwm_cmd(self, pid=False):
+    def send_pwm_cmd(self):
         r"""Envía los comandos PWM a los motores.
         """
-        # NOTE: en promedio 3.77628 ms enviando los comandos
-
-        if pid:
-            self.m1_pwm_cmd, self.m2_pwm_cmd, self.m3_pwm_cmd, self.m4_pwm_cmd = np.int_(self.pwm_output)
-            rospy.logdebug_throttle(2, "PWM commands: %s" % str(self.pwm_output))
+        # NOTE: en promedio 30ms
+        with self.pwm_lock:
+            m1_pwm_cmd = int(self.m1_pwm_cmd)
+            m2_pwm_cmd = int(self.m2_pwm_cmd)
+            m3_pwm_cmd = int(self.m3_pwm_cmd)
+            m4_pwm_cmd = int(self.m4_pwm_cmd)
 
         try:
-            if self.m1_pwm_cmd >= 0:
-                self.front.ForwardM2(self.address, self.m1_pwm_cmd)
+            if m1_pwm_cmd >= 0:
+                self.front.ForwardM2(self.address, m1_pwm_cmd)
             else:
-                self.front.BackwardM2(self.address, -self.m1_pwm_cmd)
+                self.front.BackwardM2(self.address, -m1_pwm_cmd)
 
-            if self.m2_pwm_cmd >= 0:
-                self.front.ForwardM1(self.address, self.m2_pwm_cmd)
+            if m2_pwm_cmd >= 0:
+                self.front.ForwardM1(self.address, m2_pwm_cmd)
             else:
-                self.front.BackwardM1(self.address, -self.m2_pwm_cmd)
+                self.front.BackwardM1(self.address, -m2_pwm_cmd)
 
-            if self.m3_pwm_cmd >= 0:
-                self.back.ForwardM1(self.address, self.m3_pwm_cmd)
+            if m3_pwm_cmd >= 0:
+                self.back.ForwardM1(self.address, m3_pwm_cmd)
             else:
-                self.back.BackwardM1(self.address, -self.m3_pwm_cmd)
+                self.back.BackwardM1(self.address, -m3_pwm_cmd)
 
-            if self.m4_pwm_cmd >= 0:
-                self.back.ForwardM2(self.address, self.m4_pwm_cmd)
+            if m4_pwm_cmd >= 0:
+                self.back.ForwardM2(self.address, m4_pwm_cmd)
             else:
-                self.back.BackwardM2(self.address, -self.m4_pwm_cmd)
+                self.back.BackwardM2(self.address, -m4_pwm_cmd)
 
         except OSError as e:
             rospy.logwarn("Roboclaw OSError: %d", e.errno)
             rospy.logdebug(e)
+
+    def pwm_send_loop(self):
+        """Lazo dedicado a envio de PWM hacia Roboclaw."""
+        rate_hz = max(float(self.pwm_thread_rate), 1.0)
+        pwm_rate = rospy.Rate(rate_hz)
+        while not rospy.is_shutdown():
+            self.send_pwm_cmd()
+            pwm_rate.sleep()
 
     def update_odom(self):
         """Calcula y publica odometria diferencial (x, y, yaw) y TF odom->base_link.
@@ -474,6 +490,9 @@ class MecanumNode(object):
         self.encoder_thread = threading.Thread(target=self.encoder_read_loop)
         self.encoder_thread.daemon = True
         self.encoder_thread.start()
+        self.pwm_thread = threading.Thread(target=self.pwm_send_loop)
+        self.pwm_thread.daemon = True
+        self.pwm_thread.start()
 
         r_time = rospy.Rate(60)
 
@@ -481,19 +500,33 @@ class MecanumNode(object):
 
             self.t_prev = self.t_n
             self.t_n = rospy.Time.now()
-            inicio = time.time()
+            # inicio = time.time()
 
             try:
+                # t0 = time.time()
                 self.update_wheel_speed()
+                # t1 = time.time()
                 self.get_pwm_output_pid()
-                self.send_pwm_cmd(self.PID_mode)
+                # t2 = time.time()
+                if self.PID_mode:
+                    with self.pwm_lock:
+                        self.m1_pwm_cmd, self.m2_pwm_cmd, self.m3_pwm_cmd, self.m4_pwm_cmd = np.int_(self.pwm_output)
+                    rospy.logdebug_throttle(2, "PWM commands: %s" % str(self.pwm_output))
+                # t3 = time.time()
                 self._pub_wheel_speed()
+                # t4 = time.time()
                 self._pub_encoder_value()
+                # t5 = time.time()
                 self._pub_pwm()
+                # t6 = time.time()
                 self.update_odom()
-                fin = time.time()
-                # Imprimiendo el tiempo de loop del ciclo para verificar 60hz
-                rospy.loginfo("Ciclo Completo: Inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
+                # t7 = time.time()
+                # fin = time.time()
+                # rospy.loginfo("Ciclo Completo: Inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
+                # rospy.loginfo(
+                #     "Duraciones ciclo [s] | update_wheel_speed: %.6f | get_pwm_output_pid: %.6f | send_pwm_cmd: %.6f | pub_wheel_speed: %.6f | pub_encoder: %.6f | pub_pwm: %.6f | update_odom: %.6f",
+                #     (t1 - t0), (t2 - t1), (t3 - t2), (t4 - t3), (t5 - t4), (t6 - t5), (t7 - t6)
+                # )
                 r_time.sleep()
             except Exception as e:
                 if rospy.is_shutdown():
