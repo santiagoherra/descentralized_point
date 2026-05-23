@@ -27,3 +27,4 @@ gazebo_ros/
 
 #Datos
 *.csv
+*.txt
