@@ -51,18 +51,18 @@ def blend_angle_weighted(angle_a, angle_b, weight_a):
     y = weight_a * math.sin(angle_a) + weight_b * math.sin(angle_b)
     return normalizar_angulo(math.atan2(y, x))
 
-def timeit(method):
-    def timed(*args, **kw):
-
-        inicio = rospy.Time.now()
-        result = method(*args, **kw)
-        fin = rospy.Time.now()
-
-        t_total = (fin - inicio).to_nsec()
-        rospy.logdebug("[profiling] %s : %d ns", method.__name__, t_total)
-
-        return result
-    return timed
+#def timeit(method):
+#    def timed(*args, **kw):
+#
+#        inicio = rospy.Time.now()
+#        result = method(*args, **kw)
+#        fin = rospy.Time.now()
+#
+#        t_total = (fin - inicio).to_nsec()
+#        rospy.logdebug("[profiling] %s : %d ns", method.__name__, t_total)
+#
+#        return result
+#    return timed
 
 # CLASE DE MECANUM_NODE
 
@@ -221,55 +221,17 @@ class MecanumNode(object):
         self.command_sub = rospy.Subscriber("cmd_wheels", numpy_msg(WheelSpeed), self.cmd_wheel_callback, queue_size=1)
         self.imu_sub = rospy.Subscriber(self.imu_topic, Imu, self.imu_callback, queue_size=1)
 
-    def m1_pwm_callback(self, msg):
-        # Verificacion de entrada
-        with self.pwm_lock:
-            self.m1_pwm_cmd = clip(msg.data, -127, 127)
-        #rospy.logdebug("M1 PWM command = %d", self.m1_pwm_cmd)
-
-    def m2_pwm_callback(self, msg):
-        # Verificacion de entrada
-        with self.pwm_lock:
-            self.m2_pwm_cmd = clip(msg.data, -127, 127)
-        #rospy.logdebug("M2 PWM command = %d", self.m2_pwm_cmd)
-
-    def m3_pwm_callback(self, msg):
-        # Verificacion de entrada
-        with self.pwm_lock:
-            self.m3_pwm_cmd = clip(msg.data, -127, 127)
-        #rospy.logdebug("M3 PWM command = %d", self.m3_pwm_cmd)
-
-    def m4_pwm_callback(self, msg):
-        # Verificacion de entrada
-        with self.pwm_lock:
-            self.m4_pwm_cmd = clip(msg.data, -127, 127)
-        #rospy.logdebug("M4 PWM command = %d", self.m4_pwm_cmd)
-
-    def cmd_wheel_callback(self, msg):
-        r"""Asigna el valor deseado de velocidad de las ruedas.
-        Aplica el estándar de signos según la definición de :attr:`_w_sign`.
-        """
-        self.phi_prime_ref = self._w_sign * np.clip(msg.phi, -self.w_max, self.w_max)
-        rospy.logdebug_throttle(2, "Wheel commands received: %.2f, %.2f, %.2f, %.2f" % (msg.phi[0], msg.phi[1], msg.phi[2], msg.phi[3]))
-
-    def imu_callback(self, msg):
-        """Guarda la última medición IMU para odometría."""
-        self.imu_msg = msg
-        self.imu_stamp = rospy.Time.now()
-        if self.imu_orientation_offset is None:
-            imu_orientation = self._get_imu_orientation_if_valid(msg)
-            if imu_orientation is not None:
-                # Referencia inicial para que la orientacion IMU arranque en 0 rad.
-                self.imu_orientation_offset = imu_orientation
-                rospy.loginfo("IMU orientation offset inicializado: %.4f rad", self.imu_orientation_offset)
-
     def _log_sensor_configuration(self):
         """Reporta fuentes activas para wz/orientation y alerta configuraciones invalidas."""
         rospy.loginfo(
-            f"Configuracion WZ -> encoder: {str(self.use_encoder_wz)} | imu: {str(self.use_imu_wz)}"
+            "Configuracion WZ -> encoder: %s | imu: %s",
+            str(self.use_encoder_wz),
+            str(self.use_imu_wz)
         )
         rospy.loginfo(
-            f"Configuracion ORIENTACION -> encoder: {str(self.use_encoder_orientation)} | imu: {str(self.use_imu_orientation)}"
+            "Configuracion ORIENTACION -> encoder: %s | imu: %s",
+            str(self.use_encoder_orientation),
+            str(self.use_imu_orientation)
         )
         if (not self.use_encoder_wz) and (not self.use_imu_wz):
             rospy.logwarn("WZ sin fuentes habilitadas: encoder=false e imu=false.")
@@ -320,6 +282,94 @@ class MecanumNode(object):
         if self.imu_orientation_offset is None:
             return False
         return True
+
+    def _pub_encoder_value(self):
+        """Publica el valor (raw) de los encoders"""
+
+        msg = EncTimed()
+        msg.header.frame_id = self.frame_id
+        msg.header.stamp = self.t_n
+        with self.enc_lock:
+            enc_snapshot = self.enc_n.copy()
+        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = enc_snapshot
+        self.enc_pub.publish(msg)
+
+    def _pub_wheel_speed(self):
+        r"""Publica la velocidad angular de las ruedas [rad/s], aplicando el
+        estándar de signo.
+        """
+
+        msg = WheelSpeed()
+        msg.header.stamp = self.t_n
+        msg.header.frame_id = self.frame_id
+        msg.phi = self._w_sign * self.phi_prime
+        self.phi_pub.publish(msg)
+
+    def _pub_pwm(self):
+        r"""Publica la acción de los motores (valor PWM raw)."""
+
+        msg = EncTimed()
+        msg.header.stamp = self.t_n
+        msg.header.frame_id = self.frame_id
+        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = self.pwm_output
+        self.pwm_pub.publish(msg)
+
+    def __emergency_stop(self):
+        """Apagar los motores y publicar velocidad 0 en todas las ruedas.
+        """
+        self.front.ForwardM1(self.address, 0)
+        self.front.ForwardM2(self.address, 0)
+        self.back.ForwardM1(self.address, 0)
+        self.back.ForwardM2(self.address, 0)
+
+        msg = WheelSpeed()
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = self.frame_id
+        msg.phi = np.array([0., 0., 0., 0.], dtype=np.float64)
+        self.phi_pub.publish(msg)
+        rospy.sleep(0.5)
+
+    def m1_pwm_callback(self, msg):
+        # Verificacion de entrada
+        with self.pwm_lock:
+            self.m1_pwm_cmd = clip(msg.data, -127, 127)
+        #rospy.logdebug("M1 PWM command = %d", self.m1_pwm_cmd)
+
+    def m2_pwm_callback(self, msg):
+        # Verificacion de entrada
+        with self.pwm_lock:
+            self.m2_pwm_cmd = clip(msg.data, -127, 127)
+        #rospy.logdebug("M2 PWM command = %d", self.m2_pwm_cmd)
+
+    def m3_pwm_callback(self, msg):
+        # Verificacion de entrada
+        with self.pwm_lock:
+            self.m3_pwm_cmd = clip(msg.data, -127, 127)
+        #rospy.logdebug("M3 PWM command = %d", self.m3_pwm_cmd)
+
+    def m4_pwm_callback(self, msg):
+        # Verificacion de entrada
+        with self.pwm_lock:
+            self.m4_pwm_cmd = clip(msg.data, -127, 127)
+        #rospy.logdebug("M4 PWM command = %d", self.m4_pwm_cmd)
+
+    def cmd_wheel_callback(self, msg):
+        r"""Asigna el valor deseado de velocidad de las ruedas.
+        Aplica el estándar de signos según la definición de :attr:`_w_sign`.
+        """
+        self.phi_prime_ref = self._w_sign * np.clip(msg.phi, -self.w_max, self.w_max)
+        rospy.logdebug_throttle(2, "Wheel commands received: %.2f, %.2f, %.2f, %.2f" % (msg.phi[0], msg.phi[1], msg.phi[2], msg.phi[3]))
+
+    def imu_callback(self, msg):
+        """Guarda la última medición IMU para odometría."""
+        self.imu_msg = msg
+        self.imu_stamp = rospy.Time.now()
+        if self.imu_orientation_offset is None:
+            imu_orientation = self._get_imu_orientation_if_valid(msg)
+            if imu_orientation is not None:
+                # Referencia inicial para que la orientacion IMU arranque en 0 rad.
+                self.imu_orientation_offset = imu_orientation
+                rospy.loginfo("IMU orientation offset inicializado: %.4f rad", self.imu_orientation_offset)
 
     def get_encoder_value(self):
         r"""Lee los encoders y guarda su valor en :attr:`enc_n`
@@ -579,54 +629,6 @@ class MecanumNode(object):
                     rospy.logerr(e.args)
                     rospy.logerr(e.message)
                     traceback.print_exc()
-
-    def _pub_encoder_value(self):
-        """Publica el valor (raw) de los encoders"""
-
-        msg = EncTimed()
-        msg.header.frame_id = self.frame_id
-        msg.header.stamp = self.t_n
-        with self.enc_lock:
-            enc_snapshot = self.enc_n.copy()
-        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = enc_snapshot
-        self.enc_pub.publish(msg)
-
-    def _pub_wheel_speed(self):
-        r"""Publica la velocidad angular de las ruedas [rad/s], aplicando el
-        estándar de signo.
-        """
-
-        msg = WheelSpeed()
-        msg.header.stamp = self.t_n
-        msg.header.frame_id = self.frame_id
-        msg.phi = self._w_sign * self.phi_prime
-        self.phi_pub.publish(msg)
-
-    def _pub_pwm(self):
-        r"""Publica la acción de los motores (valor PWM raw)."""
-
-        msg = EncTimed()
-        msg.header.stamp = self.t_n
-        msg.header.frame_id = self.frame_id
-        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = self.pwm_output
-        self.pwm_pub.publish(msg)
-
-
-
-    def __emergency_stop(self):
-        """Apagar los motores y publicar velocidad 0 en todas las ruedas.
-        """
-        self.front.ForwardM1(self.address, 0)
-        self.front.ForwardM2(self.address, 0)
-        self.back.ForwardM1(self.address, 0)
-        self.back.ForwardM2(self.address, 0)
-
-        msg = WheelSpeed()
-        msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = self.frame_id
-        msg.phi = np.array([0., 0., 0., 0.], dtype=np.float64)
-        self.phi_pub.publish(msg)
-        rospy.sleep(0.5)
 
     def shutdown(self):
         """Apaga el nodo"""
