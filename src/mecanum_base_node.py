@@ -102,28 +102,34 @@ class MecanumNode(object):
         rospy.loginfo("Got the following node args: %s" % str(rosargs))
 
         # Obtener parametros
-        self.baudrate = rospy.get_param("~baudrate", default=115200)
-        self.port_front = rospy.get_param("~port_front", default="/dev/ttyACM0")
-        self.port_back = rospy.get_param("~port_back", default="/dev/ttyACM1")
-        self.frame_id = rospy.get_param("~frame_id", default="mecanum_base")
-        self.ppv = rospy.get_param("~ppv", default=3415) #3415
-        self.w_max = rospy.get_param("~w_max", default=12.35)
-        self.pid_kp = rospy.get_param("~Kp", default=10.5932)
-        self.pid_ki = rospy.get_param("~Ki", default=self.pid_kp/0.2445)
-        self.pid_kd = rospy.get_param("~Kd", default=0.0)
-        self.pid_ts = 1.0/60.0
-        self.PWM_LIMIT = 100
-        self.odom_frame   = rospy.get_param("~odom_frame", "odom")
-        self.base_frame   = rospy.get_param("~base_frame", "base_link")
-        self.wheel_radius = rospy.get_param("~wheel_radius", 0.0505)  # metros
-        self.wheel_base   = rospy.get_param("~wheel_base",   0.160)   # metros (distancia entre SW y SE)
-        self.imu_topic = rospy.get_param("~imu_topic", "/imu/data")
-        self.use_imu_yaw_rate = rospy.get_param("~use_imu_yaw_rate", True)
-        self.use_imu_orientation = rospy.get_param("~use_imu_orientation", False)
-        self.imu_timeout = rospy.get_param("~imu_timeout", 0.2)  # s
-        self.imu_alpha = rospy.get_param("~imu_alpha", 0.5)  # alpha: 1.0 solo encoder, 0.0 solo IMU
+        self.baudrate = rospy.get_param("~baudrate", default=115200)  # Baudrate serial Roboclaw.
+        self.port_front = rospy.get_param("~port_front", default="/dev/ttyACM0")  # Puerto Roboclaw o sensor LiDAR.
+        self.port_back = rospy.get_param("~port_back", default="/dev/ttyACM1")  # Puerto Roboclaw o sensor LiDAR.
+        self.frame_id = rospy.get_param("~frame_id", default="mecanum_base")  # Frame para topics internos (encoders/wheel_speed/pwm).
+        self.ppv = rospy.get_param("~ppv", default=3415) # Pulsos por vuelta del encoder. REVISAR DATO
+        self.w_max = rospy.get_param("~w_max", default=12.35)  # Saturacion de referencia de velocidad de rueda [rad/s].
+        self.pid_kp = rospy.get_param("~Kp", default=10.5932)  # Ganancia proporcional del PID de velocidad.
+        self.pid_ki = rospy.get_param("~Ki", default=self.pid_kp/0.2445)  # Ganancia integral del PID.
+        self.pid_kd = rospy.get_param("~Kd", default=0.0)  # Ganancia derivativa del PID.
+        self.pid_ts = 1.0/60.0                             # Time sample del ciclo de control principal funcion run()
+        self.PWM_LIMIT = 100                               # Valor PWM limite de los motores
+        self.odom_frame   = rospy.get_param("~odom_frame", "odom")  # Frame padre de odometria.
+        self.base_frame   = rospy.get_param("~base_frame", "base_link")  # Frame hijo del robot.
+        self.wheel_radius = rospy.get_param("~wheel_radius", 0.0505)  # Radio de rueda [m].
+        self.wheel_base   = rospy.get_param("~wheel_base",   0.160)   # Distancia entre ruedas motrices [m] (SW-SE).
+        self.imu_topic = rospy.get_param("~imu_topic", "/imu/data")  # Topic IMU usado para fusion.
+        # Banderas explicitas por sensor y por variable:
+        # - wz: velocidad angular Z
+        # - orientation: orientacion theta absoluta relativa al offset inicial IMU
+        self.use_encoder_wz = rospy.get_param("~use_encoder_wz", True)  # Habilita aporte de encoder a wz.
+        self.use_encoder_orientation = rospy.get_param("~use_encoder_orientation", True)  # Habilita aporte de encoder a theta.
+        self.use_imu_wz = rospy.get_param("~use_imu_wz", True)  # Habilita aporte de IMU a wz.
+        self.use_imu_orientation = rospy.get_param("~use_imu_orientation", True)  # Habilita aporte de IMU a theta.
+        self.imu_timeout = rospy.get_param("~imu_timeout", 0.2)  # Max antiguedad IMU valida [s].
+        self.imu_alpha = rospy.get_param("~imu_alpha", 0.5)  # Peso encoder en fusion: 1.0 encoder, 0.0 IMU.
 
         self.tf_broadcaster = tf2_ros.TransformBroadcaster()
+        self._log_sensor_configuration()
 
 
         if len(rosargs) == 2 and rosargs[1] == '1':
@@ -176,7 +182,7 @@ class MecanumNode(object):
         self.theta = 0
         self.imu_msg = None
         self.imu_stamp = rospy.Time(0)
-        self.imu_yaw_offset = None
+        self.imu_orientation_offset = None
 
         self.t_n = rospy.Time.now()
         self.last_odom_time = rospy.Time.now()
@@ -184,9 +190,9 @@ class MecanumNode(object):
         self.enc_n = np.zeros(4, dtype=np.int32)
         self.enc_prime_n = np.zeros(4, dtype=np.int32)
         self.enc_lock = threading.Lock()
-        self.encoder_thread_rate = rospy.get_param("~encoder_thread_rate", 120.0)
+        self.encoder_thread_rate = rospy.get_param("~encoder_thread_rate", 120.0)  # Frecuencia hilo lectura encoders [Hz].
         self.encoder_thread = None
-        self.pwm_thread_rate = rospy.get_param("~pwm_thread_rate", 120.0)
+        self.pwm_thread_rate = rospy.get_param("~pwm_thread_rate", 120.0)  # Frecuencia hilo envio PWM [Hz].
         self.pwm_thread = None
         self.pwm_lock = threading.Lock()
         self._w_sign = np.array([1, 1, 1, 1] , dtype=np.float64)
@@ -250,14 +256,27 @@ class MecanumNode(object):
         """Guarda la última medición IMU para odometría."""
         self.imu_msg = msg
         self.imu_stamp = rospy.Time.now()
-        if self.imu_yaw_offset is None:
-            yaw_imu = self._get_imu_yaw_if_valid(msg)
-            if yaw_imu is not None:
-                # Referencia inicial para que el yaw IMU arranque en 0 rad.
-                self.imu_yaw_offset = yaw_imu
-                rospy.loginfo("IMU yaw offset inicializado: %.4f rad", self.imu_yaw_offset)
+        if self.imu_orientation_offset is None:
+            imu_orientation = self._get_imu_orientation_if_valid(msg)
+            if imu_orientation is not None:
+                # Referencia inicial para que la orientacion IMU arranque en 0 rad.
+                self.imu_orientation_offset = imu_orientation
+                rospy.loginfo("IMU orientation offset inicializado: %.4f rad", self.imu_orientation_offset)
 
-    def _is_imu_yaw_rate_valid(self, now):
+    def _log_sensor_configuration(self):
+        """Reporta fuentes activas para wz/orientation y alerta configuraciones invalidas."""
+        rospy.loginfo(
+            f"Configuracion WZ -> encoder: {str(self.use_encoder_wz)} | imu: {str(self.use_imu_wz)}"
+        )
+        rospy.loginfo(
+            f"Configuracion ORIENTACION -> encoder: {str(self.use_encoder_orientation)} | imu: {str(self.use_imu_orientation)}"
+        )
+        if (not self.use_encoder_wz) and (not self.use_imu_wz):
+            rospy.logwarn("WZ sin fuentes habilitadas: encoder=false e imu=false.")
+        if (not self.use_encoder_orientation) and (not self.use_imu_orientation):
+            rospy.logwarn("ORIENTATION sin fuentes habilitadas: encoder=false e imu=false.")
+
+    def _is_imu_wz_valid(self, now):
         """Verifica si la IMU es usable para fusionar velocidad angular Z."""
         if self.imu_msg is None:
             return False
@@ -274,8 +293,8 @@ class MecanumNode(object):
             return False
         return True
 
-    def _get_imu_yaw_if_valid(self, msg):
-        """Retorna yaw de IMU si la orientacion es valida, en otro caso None."""
+    def _get_imu_orientation_if_valid(self, msg):
+        """Retorna orientacion de IMU si es valida, en otro caso None."""
         q = msg.orientation
         q_arr = np.array([q.x, q.y, q.z, q.w], dtype=np.float64)
         if not np.all(np.isfinite(q_arr)):
@@ -287,10 +306,10 @@ class MecanumNode(object):
         if np.isfinite(orient_cov) and orient_cov < 0.0:
             return None
 
-        _, _, yaw_imu = euler_from_quaternion(q_arr.tolist())
-        if not np.isfinite(yaw_imu):
+        _, _, imu_orientation = euler_from_quaternion(q_arr.tolist())
+        if not np.isfinite(imu_orientation):
             return None
-        return normalizar_angulo(yaw_imu)
+        return normalizar_angulo(imu_orientation)
 
     def _is_imu_orientation_valid(self, now):
         """Verifica si la orientacion IMU es usable para fusionar theta."""
@@ -298,7 +317,7 @@ class MecanumNode(object):
             return False
         if (now - self.imu_stamp).to_sec() > self.imu_timeout:
             return False
-        if self.imu_yaw_offset is None:
+        if self.imu_orientation_offset is None:
             return False
         return True
 
@@ -401,7 +420,7 @@ class MecanumNode(object):
             pwm_rate.sleep()
 
     def update_odom(self):
-        """Calcula y publica odometria diferencial (x, y, yaw) y TF odom->base_link.
+        """Calcula y publica odometria diferencial (x, y, orientation) y TF odom->base_link.
 
         Ruedas motrices: SW=phi[2] (invertida) y SE=phi[3].
         Cinematica diferencial: robot triciciclo con bola pasiva al frente.
@@ -423,27 +442,49 @@ class MecanumNode(object):
         # Cinematica directa diferencial por ruedas
         vx = (r / 2.0) * (w_der + w_izq)
         wz_wheels = (r / L) * (w_der - w_izq)
-        wz = wz_wheels
+        wz = 0.0
 
-        # Aplicando pesos a las velocidades angulares:
-        # wz = alpha * wz_encoder + (1 - alpha) * wz_imu
-        imu_yaw_rate_valid = self.use_imu_yaw_rate and self._is_imu_yaw_rate_valid(now)
-        if imu_yaw_rate_valid:
+        # FUSION DE wz (velocidad angular):
+        # 1) Solo encoder: wz = wz_wheels
+        # 2) Solo IMU: wz = wz_imu
+        # 3) Ambos: wz = alpha * wz_encoder + (1-alpha) * wz_imu
+        # 4) Ninguno habilitado/valido: wz = 0
+        imu_wz_valid = self.use_imu_wz and self._is_imu_wz_valid(now)
+        encoder_wz_enabled = self.use_encoder_wz
+        if encoder_wz_enabled:
+            wz = wz_wheels
+        if imu_wz_valid:
             wz_imu = self.imu_msg.angular_velocity.z
-            wz = self.imu_alpha * wz_wheels + (1.0 - self.imu_alpha) * wz_imu
+            if encoder_wz_enabled:
+                wz = self.imu_alpha * wz_wheels + (1.0 - self.imu_alpha) * wz_imu
+            else:
+                wz = wz_imu
 
         # Integracion de pose en frame odom
         self.x     += vx * math.cos(self.theta) * dt
         self.y     += vx * math.sin(self.theta) * dt
         theta_pred = normalizar_angulo(self.theta + wz * dt)
-        yaw_imu = self._get_imu_yaw_if_valid(self.imu_msg) if self.imu_msg is not None else None
-        imu_orientation_valid = self.use_imu_orientation and self._is_imu_orientation_valid(now) and (yaw_imu is not None)
+        imu_orientation = self._get_imu_orientation_if_valid(self.imu_msg) if self.imu_msg is not None else None
+        imu_orientation_valid = self.use_imu_orientation and self._is_imu_orientation_valid(now) and (imu_orientation is not None)
+
+        # FUSION DE theta (orientacion):
+        # 1) Solo encoder_orientation: theta = theta_pred
+        # 2) Solo imu_orientation: theta = imu_orientation_rel
+        # 3) Ambos: blend(theta_pred, imu_orientation_rel, alpha)
+        # 4) Ninguno habilitado o IMU invalida cuando se requiere: mantener theta anterior
+        encoder_orientation_enabled = self.use_encoder_orientation
         if imu_orientation_valid:
-            yaw_imu_rel = normalizar_angulo(yaw_imu - self.imu_yaw_offset)
-            # Misma semantica que en wz: alpha encoder, (1-alpha) IMU.
-            self.theta = blend_angle_weighted(theta_pred, yaw_imu_rel, self.imu_alpha)
+            imu_orientation_rel = normalizar_angulo(imu_orientation - self.imu_orientation_offset)
+            if encoder_orientation_enabled:
+                # Misma semantica que en wz: alpha encoder, (1-alpha) IMU.
+                self.theta = blend_angle_weighted(theta_pred, imu_orientation_rel, self.imu_alpha)
+            else:
+                # Solo IMU orientacion.
+                self.theta = imu_orientation_rel
         else:
-            self.theta = theta_pred
+            # Sin orientacion IMU valida: usar encoder solo si esta habilitado.
+            if encoder_orientation_enabled:
+                self.theta = theta_pred
 
         qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.theta)
 
