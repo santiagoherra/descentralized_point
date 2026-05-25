@@ -195,6 +195,7 @@ class MecanumNode(object):
         self.pwm_thread_rate = rospy.get_param("~pwm_thread_rate", 120.0)  # Frecuencia hilo envio PWM [Hz].
         self.pwm_thread = None
         self.pwm_lock = threading.Lock()
+        self.emergency_stop_active = False
         self._w_sign = np.array([1, 1, 1, 1] , dtype=np.float64)
 
         # Estados para el controlador PID de velocidad
@@ -317,6 +318,13 @@ class MecanumNode(object):
     def __emergency_stop(self):
         """Apagar los motores y publicar velocidad 0 en todas las ruedas.
         """
+        self.emergency_stop_active = True
+        with self.pwm_lock:
+            self.m1_pwm_cmd = 0
+            self.m2_pwm_cmd = 0
+            self.m3_pwm_cmd = 0
+            self.m4_pwm_cmd = 0
+
         self.front.ForwardM1(self.address, 0)
         self.front.ForwardM2(self.address, 0)
         self.back.ForwardM1(self.address, 0)
@@ -430,11 +438,17 @@ class MecanumNode(object):
         r"""Envía los comandos PWM a los motores.
         """
         # NOTE: en promedio 30ms
-        with self.pwm_lock:
-            m1_pwm_cmd = int(self.m1_pwm_cmd)
-            m2_pwm_cmd = int(self.m2_pwm_cmd)
-            m3_pwm_cmd = int(self.m3_pwm_cmd)
-            m4_pwm_cmd = int(self.m4_pwm_cmd)
+        if self.emergency_stop_active:
+            m1_pwm_cmd = 0
+            m2_pwm_cmd = 0
+            m3_pwm_cmd = 0
+            m4_pwm_cmd = 0
+        else:
+            with self.pwm_lock:
+                m1_pwm_cmd = int(self.m1_pwm_cmd)
+                m2_pwm_cmd = int(self.m2_pwm_cmd)
+                m3_pwm_cmd = int(self.m3_pwm_cmd)
+                m4_pwm_cmd = int(self.m4_pwm_cmd)
 
         try:
             if m1_pwm_cmd >= 0:
@@ -509,6 +523,8 @@ class MecanumNode(object):
                 wz = self.imu_alpha * wz_wheels + (1.0 - self.imu_alpha) * wz_imu
             else:
                 wz = wz_imu
+        else:
+            wz_imu = None
 
         # Integracion de pose en frame odom
         self.x     += vx * math.cos(self.theta) * dt
@@ -516,6 +532,7 @@ class MecanumNode(object):
         theta_pred = normalizar_angulo(self.theta + wz * dt)
         imu_orientation = self._get_imu_orientation_if_valid(self.imu_msg) if self.imu_msg is not None else None
         imu_orientation_valid = self.use_imu_orientation and self._is_imu_orientation_valid(now) and (imu_orientation is not None)
+        imu_orientation_rel = None
 
         # FUSION DE theta (orientacion):
         # 1) Solo encoder_orientation: theta = theta_pred
@@ -535,6 +552,17 @@ class MecanumNode(object):
             # Sin orientacion IMU valida: usar encoder solo si esta habilitado.
             if encoder_orientation_enabled:
                 self.theta = theta_pred
+
+        # Debug en terminal: valores de encoder e IMU para wz y orientation.
+        print(
+            "wz_encoder: %.6f | wz_imu: %s | orientation_encoder: %.6f | orientation_imu: %s"
+            % (
+                wz_wheels,
+                ("%.6f" % wz_imu) if (wz_imu is not None) else "None",
+                theta_pred,
+                ("%.6f" % imu_orientation_rel) if (imu_orientation_rel is not None) else "None",
+            )
+        )
 
         qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.theta)
 
@@ -599,7 +627,7 @@ class MecanumNode(object):
                 # t1 = time.time()
                 self.get_pwm_output_pid()
                 # t2 = time.time()
-                if self.PID_mode:
+                if self.PID_mode and (not self.emergency_stop_active):
                     with self.pwm_lock:
                         self.m1_pwm_cmd, self.m2_pwm_cmd, self.m3_pwm_cmd, self.m4_pwm_cmd = np.int_(self.pwm_output)
                     rospy.logdebug_throttle(2, "PWM commands: %s" % str(self.pwm_output))
