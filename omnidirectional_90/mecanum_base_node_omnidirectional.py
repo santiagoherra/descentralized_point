@@ -5,15 +5,23 @@ import sys
 import rospy
 import numpy as np
 import math
+import traceback
+import time
+import threading
+
 
 from serial import SerialException
 import errno
 
 from rospy.numpy_msg import numpy_msg
-from std_msgs.msg import Int8, Int32
+from std_msgs.msg import Int8, Int32, Float32
 from roboclaw.roboclaw import Roboclaw
 from mecanumrob_common.msg import EncTimed, WheelSpeed
-
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped, Quaternion
+from sensor_msgs.msg import Imu
+import tf2_ros
+from tf.transformations import quaternion_from_euler, euler_from_quaternion
 
 #--------------------------------------------------#
 #def debug_signal_handler(signal, frame):
@@ -25,34 +33,76 @@ from mecanumrob_common.msg import EncTimed, WheelSpeed
 #signal.signal(signal.SIGUSR1, debug_signal_handler)
 #--------------------------------------------------#
 
+# FUNCIONES EXTRA
 
 def clip(val, minval, maxval):
     r"""Acota una variable entre dos valores, p. ej. (-127,127)"""
     return max(min(val, maxval), minval)
 
-def timeit(method):
-    def timed(*args, **kw):
+def normalizar_angulo(angulo):
+    """Normaliza el angulo a (-pi, pi] segun REP-103."""
+    return math.atan2(math.sin(angulo), math.cos(angulo))
 
-        inicio = rospy.Time.now()
-        result = method(*args, **kw)
-        fin = rospy.Time.now()
+def blend_angle_weighted(angle_a, angle_b, weight_a):
+    """Mezcla angular robusta a wrap-around usando promedio vectorial en S1."""
+    weight_a = clip(weight_a, 0.0, 1.0)
+    weight_b = 1.0 - weight_a
+    x = weight_a * math.cos(angle_a) + weight_b * math.cos(angle_b)
+    y = weight_a * math.sin(angle_a) + weight_b * math.sin(angle_b)
+    return normalizar_angulo(math.atan2(y, x))
 
-        t_total = (fin - inicio).to_nsec()
-        rospy.logdebug("[profiling] %s : %d ns", method.__name__, t_total)
+#def timeit(method):
+#    def timed(*args, **kw):
+#
+#        inicio = rospy.Time.now()
+#        result = method(*args, **kw)
+#        fin = rospy.Time.now()
+#
+#        t_total = (fin - inicio).to_nsec()
+#        rospy.logdebug("[profiling] %s : %d ns", method.__name__, t_total)
+#
+#        return result
+#    return timed
 
-        return result
-    return timed
+# CLASE DE MECANUM_NODE
 
 class MecanumNode(object):
-    r"""Nodo para una base del MecanumRob, con 2 controladores de motores Roboclaw.
+    r"""Nodo para una base omnidireccional de 4 ruedas en cruz, con 2
+    controladores de motores Roboclaw (cada uno maneja 2 motores).
+
+    Convencion geometrica (ver resumen_robot_omnidireccional_4_ruedas_cruz.pdf)::
+
+            +X
+             ^
+           [R1]
+             |
+        [R2]--- O ---[R4]
+             |
+           [R3]
+        +Y <---
+
+    R1 = rueda en +X (frente), R2 = rueda en +Y (izquierda),
+    R3 = rueda en -X (atras), R4 = rueda en -Y (derecha). Las cuatro estan a
+    distancia :attr:`L` del centro, con traccion tangencial (ruedas omni).
+
+    Cinematica directa (de velocidad de rueda a velocidad de chasis)::
+
+        vx    = (r/2)     * (w4 - w2)
+        vy    = (r/2)     * (w1 - w3)
+        omega = (r/(4*L)) * (w1 + w2 + w3 + w4)
+
+    El mapeo fisico de cada rueda hacia (controlador, numero de motor) y el
+    signo de giro de cada motor todavia no se conocen (cableado pendiente),
+    por lo que se exponen como parametros ROS (``~wheel_controller``,
+    ``~wheel_motor``, ``~wheel_sign``) en vez de quedar fijos en el codigo.
 
     Attributes:
             baudrate (int): Velocidad de transmisión para la comunicacion serial,
                 en baud/s, 115200 por defecto.
-            port_front (str): Nombre/ruta del dispositivo para el motor delantero,
-                por defecto `/dev/actuators/roboclaw_0`.
-            port_back (str): Nombre/ruta del dispositivo para el motor trasero,
-                por defecto `/dev/actuators/roboclaw_1`.
+            port_ctrl_1 (str): Nombre/ruta del dispositivo para el primer
+                controlador Roboclaw (bus USB independiente).
+            port_ctrl_2 (str): Nombre/ruta del dispositivo para el segundo
+                controlador Roboclaw (bus USB independiente).
             frame_id (str): Nombre para el marco de referencia del robot, por
                 defecto `mecanum`
             t_n (Rospy.Time): momento de la última lectura de los encoders.
@@ -62,12 +112,9 @@ class MecanumNode(object):
             ppv (int): pulsos por vuelta de los encoders.
 
     Note:
-        Para mantener el estándar con el modelo cinemático del MecanumRob, los
-        vectores :attr:`phi_n` y :attr:`phi_prev` se definen con el siguiente
-        orden `{NE, NW, SW, SE}`, además se define el vector de signo `_w_sign`
-        para el cálculo de velocidad angular de las ruedas, de modo que un valor
-        positivo se define según la ley de la mano derecha visto del frente del robot,
-        (una rueda que avanza tiene velocidad positiva).
+        Los vectores relacionados a las ruedas (:attr:`phi_n`, :attr:`phi_prime`,
+        :attr:`wheel_controller`, :attr:`wheel_motor`, :attr:`_w_sign`, etc.) se
+        definen siempre con el orden `{R1, R2, R3, R4}` descrito arriba.
 
     """
     def __init__(self):
@@ -79,17 +126,41 @@ class MecanumNode(object):
         rospy.loginfo("Got the following node args: %s" % str(rosargs))
 
         # Obtener parametros
-        self.baudrate = rospy.get_param("~baudrate", default=115200)
-        self.port_front = rospy.get_param("~port_front", default="/dev/actuators/roboclaw_0")
-        self.port_back = rospy.get_param("~port_back", default="/dev/actuators/roboclaw_1")
-        self.frame_id = rospy.get_param("~frame_id", default="mecanum_base")
-        self.ppv = rospy.get_param("~ppv", default=4775)
-        self.w_max = rospy.get_param("~w_max", default=31.4)
-        self.pid_kp = rospy.get_param("~Kp", default=10.5932)
-        self.pid_ki = rospy.get_param("~Ki", default=self.pid_kp/0.2445)
-        self.pid_kd = rospy.get_param("~Kd", default=0.0)
-        self.pid_ts = 1.0/60.0
-        self.PWM_LIMIT = 100
+        self.baudrate = rospy.get_param("~baudrate", default=115200)  # Baudrate serial Roboclaw.
+        self.port_ctrl_1 = rospy.get_param("~port_ctrl_1", default="/dev/ttyACM0")  # Puerto del primer controlador Roboclaw (bus USB propio).
+        self.port_ctrl_2 = rospy.get_param("~port_ctrl_2", default="/dev/ttyACM1")  # Puerto del segundo controlador Roboclaw (bus USB propio).
+        self.frame_id = rospy.get_param("~frame_id", default="mecanum_base")  # Frame para topics internos (encoders/wheel_speed/pwm).
+        self.ppv = rospy.get_param("~ppv", default=3415) # Pulsos por vuelta del encoder. REVISAR DATO
+        self.w_max = rospy.get_param("~w_max", default=12.35)  # Saturacion de referencia de velocidad de rueda [rad/s].
+        self.pid_kp = rospy.get_param("~Kp", default=10.5932)  # Ganancia proporcional del PID de velocidad.
+        self.pid_ki = rospy.get_param("~Ki", default=self.pid_kp/0.2445)  # Ganancia integral del PID.
+        self.pid_kd = rospy.get_param("~Kd", default=0.0)  # Ganancia derivativa del PID.
+        self.pid_ts = 1.0/60.0                             # Time sample del ciclo de control principal funcion run()
+        self.PWM_LIMIT = 100                               # Valor PWM limite de los motores
+        self.odom_frame   = rospy.get_param("~odom_frame", "odom")  # Frame padre de odometria.
+        self.base_frame   = rospy.get_param("~base_frame", "base_link")  # Frame hijo del robot.
+        self.wheel_radius = rospy.get_param("~wheel_radius", 0.0505)  # Radio efectivo de rueda r [m].
+        self.L = rospy.get_param("~wheel_center_distance", 0.160)  # Distancia L del centro del robot a cada rueda [m]. PLACEHOLDER: medir en el robot real.
+        self.imu_topic = rospy.get_param("~imu_topic", "/imu/data")  # Topic IMU usado para fusion.
+        # Banderas explicitas por sensor y por variable:
+        # - wz: velocidad angular Z
+        # - orientation: orientacion theta absoluta relativa al offset inicial IMU
+        self.use_encoder_wz = rospy.get_param("~use_encoder_wz", True)  # Habilita aporte de encoder a wz.
+        self.use_encoder_orientation = rospy.get_param("~use_encoder_orientation", True)  # Habilita aporte de encoder a theta.
+        self.use_imu_wz = rospy.get_param("~use_imu_wz", True)  # Habilita aporte de IMU a wz.
+        self.use_imu_orientation = rospy.get_param("~use_imu_orientation", True)  # Habilita aporte de IMU a theta.
+        self.imu_timeout = rospy.get_param("~imu_timeout", 0.2)  # Max antiguedad IMU valida [s].
+        self.imu_alpha = rospy.get_param("~imu_alpha", 0.5)  # Peso encoder en fusion: 1.0 encoder, 0.0 IMU.
+
+        # PLACEHOLDER: mapeo fisico rueda -> (controlador, motor, signo). Cableado aun no definido,
+        # ajustar estos parametros (por ejemplo desde el .launch) cuando se conecte el robot real.
+        # Orden fijo {R1, R2, R3, R4}.
+        self.wheel_controller = np.array(rospy.get_param("~wheel_controller", [1, 1, 2, 2]), dtype=np.int32)  # 1 -> port_ctrl_1, 2 -> port_ctrl_2
+        self.wheel_motor = np.array(rospy.get_param("~wheel_motor", [1, 2, 1, 2]), dtype=np.int32)  # 1 -> M1, 2 -> M2 del controlador asignado
+        self._w_sign = np.array(rospy.get_param("~wheel_sign", [1, 1, 1, 1]), dtype=np.float64)  # signo de giro por rueda, segun direccion real del motor
+
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster()
+        self._log_sensor_configuration()
 
 
         if len(rosargs) == 2 and rosargs[1] == '1':
@@ -101,17 +172,19 @@ class MecanumNode(object):
 
         self.address = 0x80
 
-        self.front = Roboclaw(comport=self.port_front, rate=self.baudrate)
-        rospy.loginfo("Connected to front roboclaw on port %s", self.port_front)
+        self.ctrl_1 = Roboclaw(comport=self.port_ctrl_1, rate=self.baudrate)
+        rospy.loginfo("Connected to Roboclaw #1 on port %s", self.port_ctrl_1)
 
-        self.back = Roboclaw(comport=self.port_back, rate=self.baudrate)
-        rospy.loginfo("Connected to back roboclaw on port %s", self.port_back)
+        self.ctrl_2 = Roboclaw(comport=self.port_ctrl_2, rate=self.baudrate)
+        rospy.loginfo("Connected to Roboclaw #2 on port %s", self.port_ctrl_2)
+
+        self.controllers = [self.ctrl_1, self.ctrl_2]
 
         rospy.on_shutdown(self.shutdown)
 
-        for motor in [self.front, self.back]:
+        for controller in self.controllers:
             try:
-                version = motor.ReadVersion(self.address)
+                version = controller.ReadVersion(self.address)
                 rospy.logdebug("Version " + str(repr(version[1])))
             except Exception as e:
                 rospy.logwarn("Problem getting roboclaw version")
@@ -119,26 +192,36 @@ class MecanumNode(object):
                 raise SerialException("Connectivity issue. Could not read version")
 
         # Crear publicaciones de los encoders
-        #self.m1_enc_pub = rospy.Publisher("~encoder/front_left_enc", Int32, queue_size=0)
-        #self.m2_enc_pub = rospy.Publisher("~encoder/front_right_enc", Int32, queue_size=0)
-        #self.m3_enc_pub = rospy.Publisher("~encoder/back_left_enc", Int32, queue_size=0)
-        #self.m4_enc_pub = rospy.Publisher("~encoder/back_right_enc", Int32, queue_size=0)
         self.enc_pub = rospy.Publisher("encoders", EncTimed, queue_size=0)
         self.phi_pub = rospy.Publisher("wheel_speed", numpy_msg(WheelSpeed), queue_size=0)
         self.pwm_pub = rospy.Publisher("pwm", EncTimed, queue_size=0)
+        self.odom_pub = rospy.Publisher("/odom", Odometry, queue_size=1)
 
         # Inicializar valores
-        # Inicialmente los motores estan detenidos
-        self.m1_pwm_cmd = 0
-        self.m2_pwm_cmd = 0
-        self.m3_pwm_cmd = 0
-        self.m4_pwm_cmd = 0
-        self.front.ResetEncoders(self.address)
-        self.back.ResetEncoders(self.address)
+        # Inicialmente los motores estan detenidos. Orden {R1, R2, R3, R4}.
+        self.pwm_cmd = np.zeros(4, dtype=np.float64)
+        for controller in self.controllers:
+            controller.ResetEncoders(self.address)
+
+        self.x = 0
+        self.y = 0
+        self.theta = 0
+        self.imu_msg = None
+        self.imu_stamp = rospy.Time(0)
+        self.imu_orientation_offset = None
 
         self.t_n = rospy.Time.now()
+        self.last_odom_time = rospy.Time.now()
         self.phi_n = np.zeros(4, dtype=np.float64)
-        self._w_sign = np.array([1, -1, 1, 1] , dtype=np.float64)
+        self.enc_n = np.zeros(4, dtype=np.int32)
+        self.enc_prime_n = np.zeros(4, dtype=np.int32)
+        self.enc_lock = threading.Lock()
+        self.encoder_thread_rate = rospy.get_param("~encoder_thread_rate", 120.0)  # Frecuencia hilo lectura encoders [Hz].
+        self.encoder_thread = None
+        self.pwm_thread_rate = rospy.get_param("~pwm_thread_rate", 120.0)  # Frecuencia hilo envio PWM [Hz].
+        self.pwm_thread = None
+        self.pwm_lock = threading.Lock()
+        self.emergency_stop_active = False
 
         # Estados para el controlador PID de velocidad
         self.phi_prime = np.zeros(4, dtype=np.float64)
@@ -154,97 +237,189 @@ class MecanumNode(object):
         self.pid_coef = np.array([1, a, b, c], dtype=np.float64)
 
 
-        # Crear subscripciones, una para cada motor
-        self.m1_pwm_sub = rospy.Subscriber("motor/NE_pwm", Int8, self.m1_pwm_callback, queue_size=1)
-        self.m2_pwm_sub = rospy.Subscriber("motor/NW_pwm", Int8, self.m2_pwm_callback, queue_size=1)
-        self.m3_pwm_sub = rospy.Subscriber("motor/SW_pwm", Int8, self.m3_pwm_callback, queue_size=1)
-        self.m4_pwm_sub = rospy.Subscriber("motor/SE_pwm", Int8, self.m4_pwm_callback, queue_size=1)
+        # Crear subscripciones, una por rueda {R1, R2, R3, R4}
+        self.pwm_subs = []
+        for wheel_idx in range(4):
+            topic = "motor/R%d_pwm" % (wheel_idx + 1)
+            sub = rospy.Subscriber(topic, Int8, self._make_pwm_callback(wheel_idx), queue_size=1)
+            self.pwm_subs.append(sub)
 
         # Comandos para el robot
         self.command_sub = rospy.Subscriber("cmd_wheels", numpy_msg(WheelSpeed), self.cmd_wheel_callback, queue_size=1)
+        self.imu_sub = rospy.Subscriber(self.imu_topic, Imu, self.imu_callback, queue_size=1)
 
+    def _log_sensor_configuration(self):
+        """Reporta fuentes activas para wz/orientation y alerta configuraciones invalidas."""
+        rospy.loginfo(
+            "Configuracion WZ -> encoder: %s | imu: %s",
+            str(self.use_encoder_wz),
+            str(self.use_imu_wz)
+        )
+        rospy.loginfo(
+            "Configuracion ORIENTACION -> encoder: %s | imu: %s",
+            str(self.use_encoder_orientation),
+            str(self.use_imu_orientation)
+        )
+        if (not self.use_encoder_wz) and (not self.use_imu_wz):
+            rospy.logwarn("WZ sin fuentes habilitadas: encoder=false e imu=false.")
+        if (not self.use_encoder_orientation) and (not self.use_imu_orientation):
+            rospy.logwarn("ORIENTATION sin fuentes habilitadas: encoder=false e imu=false.")
 
-    def m1_pwm_callback(self, msg):
-        # Verificacion de entrada
-        self.m1_pwm_cmd = clip(msg.data, -127, 127)
-        #rospy.logdebug("M1 PWM command = %d", self.m1_pwm_cmd)
+    def _is_imu_wz_valid(self, now):
+        """Verifica si la IMU es usable para fusionar velocidad angular Z."""
+        if self.imu_msg is None:
+            return False
+        if (now - self.imu_stamp).to_sec() > self.imu_timeout:
+            return False
 
-    def m2_pwm_callback(self, msg):
-        # Verificacion de entrada
-        self.m2_pwm_cmd = clip(msg.data, -127, 127)
-        #rospy.logdebug("M2 PWM command = %d", self.m2_pwm_cmd)
+        wz_imu = self.imu_msg.angular_velocity.z
+        if not np.isfinite(wz_imu):
+            return False
 
-    def m3_pwm_callback(self, msg):
-        # Verificacion de entrada
-        self.m3_pwm_cmd = clip(msg.data, -127, 127)
-        #rospy.logdebug("M3 PWM command = %d", self.m3_pwm_cmd)
+        # En sensor_msgs/Imu, -1 en covarianza indica que la medicion no es confiable.
+        wz_cov = self.imu_msg.angular_velocity_covariance[8]
+        if np.isfinite(wz_cov) and wz_cov < 0.0:
+            return False
+        return True
 
-    def m4_pwm_callback(self, msg):
-        # Verificacion de entrada
-        self.m4_pwm_cmd = clip(msg.data, -127, 127)
-        #rospy.logdebug("M4 PWM command = %d", self.m4_pwm_cmd)
+    def _get_imu_orientation_if_valid(self, msg):
+        """Retorna orientacion de IMU si es valida, en otro caso None."""
+        q = msg.orientation
+        q_arr = np.array([q.x, q.y, q.z, q.w], dtype=np.float64)
+        if not np.all(np.isfinite(q_arr)):
+            return None
+        if np.linalg.norm(q_arr) < 1e-9:
+            return None
+
+        orient_cov = msg.orientation_covariance[8]
+        if np.isfinite(orient_cov) and orient_cov < 0.0:
+            return None
+
+        _, _, imu_orientation = euler_from_quaternion(q_arr.tolist())
+        if not np.isfinite(imu_orientation):
+            return None
+        return normalizar_angulo(imu_orientation)
+
+    def _is_imu_orientation_valid(self, now):
+        """Verifica si la orientacion IMU es usable para fusionar theta."""
+        if self.imu_msg is None:
+            return False
+        if (now - self.imu_stamp).to_sec() > self.imu_timeout:
+            return False
+        if self.imu_orientation_offset is None:
+            return False
+        return True
+
+    def _pub_encoder_value(self):
+        """Publica el valor (raw) de los encoders, orden {R1, R2, R3, R4}."""
+
+        msg = EncTimed()
+        msg.header.frame_id = self.frame_id
+        msg.header.stamp = self.t_n
+        with self.enc_lock:
+            enc_snapshot = self.enc_n.copy()
+        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = enc_snapshot
+        self.enc_pub.publish(msg)
+
+    def _pub_wheel_speed(self):
+        r"""Publica la velocidad angular de las ruedas [rad/s], aplicando el
+        estándar de signo, orden {R1, R2, R3, R4}.
+        """
+
+        msg = WheelSpeed()
+        msg.header.stamp = self.t_n
+        msg.header.frame_id = self.frame_id
+        msg.phi = self._w_sign * self.phi_prime
+        self.phi_pub.publish(msg)
+
+    def _pub_pwm(self):
+        r"""Publica la acción de los motores (valor PWM raw), orden {R1, R2, R3, R4}."""
+
+        msg = EncTimed()
+        msg.header.stamp = self.t_n
+        msg.header.frame_id = self.frame_id
+        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = self.pwm_output
+        self.pwm_pub.publish(msg)
+
+    def _controller_for_wheel(self, wheel_idx):
+        """Retorna el objeto Roboclaw asignado a la rueda `wheel_idx` (0..3 -> R1..R4)."""
+        return self.controllers[self.wheel_controller[wheel_idx] - 1]
+
+    def __emergency_stop(self):
+        """Apagar los motores y publicar velocidad 0 en todas las ruedas.
+        """
+        self.emergency_stop_active = True
+        with self.pwm_lock:
+            self.pwm_cmd[:] = 0.0
+
+        for controller in self.controllers:
+            controller.ForwardM1(self.address, 0)
+            controller.ForwardM2(self.address, 0)
+
+        msg = WheelSpeed()
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = self.frame_id
+        msg.phi = np.array([0., 0., 0., 0.], dtype=np.float64)
+        self.phi_pub.publish(msg)
+        rospy.sleep(0.5)
+
+    def _make_pwm_callback(self, wheel_idx):
+        """Crea el callback de PWM para la rueda `wheel_idx` (0..3 -> R1..R4)."""
+        def callback(msg):
+            with self.pwm_lock:
+                self.pwm_cmd[wheel_idx] = clip(msg.data, -127, 127)
+        return callback
 
     def cmd_wheel_callback(self, msg):
         r"""Asigna el valor deseado de velocidad de las ruedas.
         Aplica el estándar de signos según la definición de :attr:`_w_sign`.
+        Orden esperado en `msg.phi`: {R1, R2, R3, R4}.
         """
         self.phi_prime_ref = self._w_sign * np.clip(msg.phi, -self.w_max, self.w_max)
         rospy.logdebug_throttle(2, "Wheel commands received: %.2f, %.2f, %.2f, %.2f" % (msg.phi[0], msg.phi[1], msg.phi[2], msg.phi[3]))
 
-
-    def get_encoder_speed(self):
-        r"""Lee las velocidades de los encoders.
-        Los valores se dan en cuentas por segundo, en :attr:`enc_prime_n`
-        """
-
-        # TODO: La lectura parece hacerse de forma bloqueante, por lo que está
-        # durando en promedio 12.3174 ms. Se podria mejorar considerablemente el
-        # tiempo haciendolo no bloqueante, habria que cambiar el paquete roboclaw
-        # y meterse con el uso de Serial. O tambien haciendo un hilo que se encargue
-        # de la comunicacion serial.
-        try:
-            enc_m1 = self.front.ReadSpeedM2(self.address)
-            enc_m2 = self.front.ReadSpeedM1(self.address)
-            enc_m3 = self.back.ReadSpeedM1(self.address)
-            enc_m4 = self.back.ReadSpeedM2(self.address)
-        except OSError as e:
-            rospy.logwarn("Roboclaw OSError: %d", e.errno)
-            rospy.logdebug(e)
-
-        #self.t_prev = self.t_n
-        #self.t_n = rospy.Time.now()
-
-        # self.phi_prev = self.phi_n
-        # self.phi_n = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
-
-        # self.enc_prime_prev = self.enc_prime_n
-        self.enc_prime_n = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
-
-        # norm = np.abs(self.enc_prime_n - self.enc_prime_prev)
-        # for x in norm:
-        #     if x > 7000:
-        #         rospy.logerr("Unexpected speed values detected!")
-        #         rospy.logerr(norm)
+    def imu_callback(self, msg):
+        """Guarda la última medición IMU para odometría."""
+        self.imu_msg = msg
+        self.imu_stamp = rospy.Time.now()
+        if self.imu_orientation_offset is None:
+            imu_orientation = self._get_imu_orientation_if_valid(msg)
+            if imu_orientation is not None:
+                # Referencia inicial para que la orientacion IMU arranque en 0 rad.
+                self.imu_orientation_offset = imu_orientation
+                rospy.loginfo("IMU orientation offset inicializado: %.4f rad", self.imu_orientation_offset)
 
     def get_encoder_value(self):
-        r"""Lee los encoders y guarda su valor en :attr:`enc_n`"""
-
-        # TODO: La lectura parece hacerse de forma bloqueante, por lo que está
-        # durando en promedio 12.3174 ms. Se podria mejorar considerablemente el
-        # tiempo haciendolo no bloqueante, habria que cambiar el paquete roboclaw
-        # y meterse con el uso de Serial. O tambien haciendo un hilo que se encargue
-        # de la comunicacion serial.
+        r"""Lee los encoders de las 4 ruedas y guarda su valor en :attr:`enc_n`,
+        usando el mapeo :attr:`wheel_controller`/:attr:`wheel_motor` (orden {R1, R2, R3, R4}).
+        """
         try:
-            enc_m1 = self.front.ReadEncM2(self.address)
-            enc_m2 = self.front.ReadEncM1(self.address)
-            enc_m3 = self.back.ReadEncM1(self.address)
-            enc_m4 = self.back.ReadEncM2(self.address)
+            enc_vals = np.zeros(4, dtype=np.int32)
+            for wheel_idx in range(4):
+                controller = self._controller_for_wheel(wheel_idx)
+                if self.wheel_motor[wheel_idx] == 1:
+                    enc = controller.ReadEncM1(self.address)
+                else:
+                    enc = controller.ReadEncM2(self.address)
+                enc_vals[wheel_idx] = enc[1]
         except OSError as e:
             rospy.logwarn("Roboclaw OSError: %d", e.errno)
             rospy.logdebug(e)
+            return False
 
-        self.enc_n = np.array([enc_m1[1], enc_m2[1], enc_m3[1], enc_m4[1]], dtype=np.int32)
+        with self.enc_lock:
+            self.enc_prime_n = enc_vals
+            # Copia (no se sabe porque aun)
+            self.enc_n = enc_vals.copy()
+        return True
 
+    def encoder_read_loop(self):
+        """Lazo dedicado a lectura de encoders."""
+        rate_hz = max(float(self.encoder_thread_rate), 1.0)
+        enc_rate = rospy.Rate(rate_hz)
+        while not rospy.is_shutdown():
+            self.get_encoder_value()
+            enc_rate.sleep()
 
     def update_wheel_speed(self):
         """ Calcula la velocidad angular de las ruedas.
@@ -256,7 +431,9 @@ class MecanumNode(object):
 
         donde :math:`Q_i` es la lectura i-ésima de los encoders de cuadratura del Roboclaw.
         """
-        self.phi_prime = self.enc_prime_n*2.0*math.pi/self.ppv
+        with self.enc_lock:
+            enc_snapshot = self.enc_prime_n.copy()
+        self.phi_prime = enc_snapshot * 2.0 * math.pi / self.ppv
 
     def get_pwm_output_pid(self):
         """Aplica el lazo de control PID."""
@@ -271,39 +448,160 @@ class MecanumNode(object):
         self.pwm_output = np.clip(np.matmul(H, self.pid_coef), -self.PWM_LIMIT, self.PWM_LIMIT)
 
     #@timeit
-    def send_pwm_cmd(self, pid=False):
-        r"""Envía los comandos PWM a los motores.
+    def send_pwm_cmd(self):
+        r"""Envía los comandos PWM a los motores, usando el mapeo
+        :attr:`wheel_controller`/:attr:`wheel_motor` (orden {R1, R2, R3, R4}).
         """
-        # NOTE: en promedio 3.77628 ms enviando los comandos
-
-        if pid:
-            self.m1_pwm_cmd, self.m2_pwm_cmd, self.m3_pwm_cmd, self.m4_pwm_cmd = np.int_(self.pwm_output)
-            rospy.logdebug_throttle(2, "PWM commands: %s" % str(self.pwm_output))
+        # NOTE: en promedio 30ms
+        if self.emergency_stop_active:
+            pwm_cmds = np.zeros(4, dtype=np.int32)
+        else:
+            with self.pwm_lock:
+                pwm_cmds = np.int_(self.pwm_cmd)
 
         try:
-            if self.m1_pwm_cmd >= 0:
-                self.front.ForwardM2(self.address, self.m1_pwm_cmd)
-            else:
-                self.front.BackwardM2(self.address, -self.m1_pwm_cmd)
-
-            if self.m2_pwm_cmd >= 0:
-                self.front.ForwardM1(self.address, self.m2_pwm_cmd)
-            else:
-                self.front.BackwardM1(self.address, -self.m2_pwm_cmd)
-
-            if self.m3_pwm_cmd >= 0:
-                self.back.ForwardM1(self.address, self.m3_pwm_cmd)
-            else:
-                self.back.BackwardM1(self.address, -self.m3_pwm_cmd)
-
-            if self.m4_pwm_cmd >= 0:
-                self.back.ForwardM2(self.address, self.m4_pwm_cmd)
-            else:
-                self.back.BackwardM2(self.address, -self.m4_pwm_cmd)
+            for wheel_idx in range(4):
+                controller = self._controller_for_wheel(wheel_idx)
+                cmd = int(pwm_cmds[wheel_idx])
+                if self.wheel_motor[wheel_idx] == 1:
+                    if cmd >= 0:
+                        controller.ForwardM1(self.address, cmd)
+                    else:
+                        controller.BackwardM1(self.address, -cmd)
+                else:
+                    if cmd >= 0:
+                        controller.ForwardM2(self.address, cmd)
+                    else:
+                        controller.BackwardM2(self.address, -cmd)
 
         except OSError as e:
             rospy.logwarn("Roboclaw OSError: %d", e.errno)
             rospy.logdebug(e)
+
+    def pwm_send_loop(self):
+        """Lazo dedicado a envio de PWM hacia Roboclaw."""
+        rate_hz = max(float(self.pwm_thread_rate), 1.0)
+        pwm_rate = rospy.Rate(rate_hz)
+        while not rospy.is_shutdown():
+            self.send_pwm_cmd()
+            pwm_rate.sleep()
+
+    def update_odom(self):
+        """Calcula y publica odometria holonomica (x, y, orientation) y TF odom->base_link.
+
+        Robot omnidireccional de 4 ruedas en cruz (R1=+X, R2=+Y, R3=-X, R4=-Y).
+        Cinematica directa (ver resumen_robot_omnidireccional_4_ruedas_cruz.pdf)::
+
+            vx    = (r/2)     * (w4 - w2)
+            vy    = (r/2)     * (w1 - w3)
+            omega = (r/(4*L)) * (w1 + w2 + w3 + w4)
+        """
+        now = rospy.Time.now()
+        dt = (now - self.last_odom_time).to_sec()
+        if dt <= 0.0:
+            return
+        self.last_odom_time = now
+
+        r = self.wheel_radius
+        L = self.L
+
+        # Velocidades angulares de las ruedas motrices [rad/s], orden {R1, R2, R3, R4}
+        w1, w2, w3, w4 = self.phi_prime
+
+        # Cinematica directa holonomica (chasis en su propio marco)
+        vx = (r / 2.0) * (w4 - w2)
+        vy = (r / 2.0) * (w1 - w3)
+        omega_wheels = (r / (4.0 * L)) * (w1 + w2 + w3 + w4)
+        wz = 0.0
+
+        # FUSION DE wz (velocidad angular):
+        # 1) Solo encoder: wz = omega_wheels
+        # 2) Solo IMU: wz = wz_imu
+        # 3) Ambos: wz = alpha * omega_wheels + (1-alpha) * wz_imu
+        # 4) Ninguno habilitado/valido: wz = 0
+        imu_wz_valid = self.use_imu_wz and self._is_imu_wz_valid(now)
+        encoder_wz_enabled = self.use_encoder_wz
+        if encoder_wz_enabled:
+            wz = omega_wheels
+        if imu_wz_valid:
+            wz_imu = self.imu_msg.angular_velocity.z
+            if encoder_wz_enabled:
+                wz = self.imu_alpha * omega_wheels + (1.0 - self.imu_alpha) * wz_imu
+            else:
+                wz = wz_imu
+        else:
+            wz_imu = None
+
+        # Integracion de pose en frame odom (rotando la velocidad del chasis por theta)
+        self.x     += (vx * math.cos(self.theta) - vy * math.sin(self.theta)) * dt
+        self.y     += (vx * math.sin(self.theta) + vy * math.cos(self.theta)) * dt
+        theta_pred = normalizar_angulo(self.theta + wz * dt)
+        imu_orientation = self._get_imu_orientation_if_valid(self.imu_msg) if self.imu_msg is not None else None
+        imu_orientation_valid = self.use_imu_orientation and self._is_imu_orientation_valid(now) and (imu_orientation is not None)
+        imu_orientation_rel = None
+
+        # FUSION DE theta (orientacion):
+        # 1) Solo encoder_orientation: theta = theta_pred
+        # 2) Solo imu_orientation: theta = imu_orientation_rel
+        # 3) Ambos: blend(theta_pred, imu_orientation_rel, alpha)
+        # 4) Ninguno habilitado o IMU invalida cuando se requiere: mantener theta anterior
+        encoder_orientation_enabled = self.use_encoder_orientation
+        if imu_orientation_valid:
+            imu_orientation_rel = normalizar_angulo(imu_orientation - self.imu_orientation_offset)
+            if encoder_orientation_enabled:
+                # Misma semantica que en wz: alpha encoder, (1-alpha) IMU.
+                self.theta = blend_angle_weighted(theta_pred, imu_orientation_rel, self.imu_alpha)
+            else:
+                # Solo IMU orientacion.
+                self.theta = imu_orientation_rel
+        else:
+            # Sin orientacion IMU valida: usar encoder solo si esta habilitado.
+            if encoder_orientation_enabled:
+                self.theta = theta_pred
+
+        # Debug en terminal: valores de encoder e IMU para wz y orientation.
+        print(
+            "wz_encoder: %.6f | wz_imu: %s | orientation_encoder: %.6f | orientation_imu: %s"
+            % (
+                omega_wheels,
+                ("%.6f" % wz_imu) if (wz_imu is not None) else "None",
+                theta_pred,
+                ("%.6f" % imu_orientation_rel) if (imu_orientation_rel is not None) else "None",
+            )
+        )
+
+        qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, self.theta)
+
+        # --- TF: odom -> base_link ---
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp    = now
+        tf_msg.header.frame_id = self.odom_frame
+        tf_msg.child_frame_id  = self.base_frame
+        tf_msg.transform.translation.x = self.x
+        tf_msg.transform.translation.y = self.y
+        tf_msg.transform.translation.z = 0.0
+        tf_msg.transform.rotation.x = qx
+        tf_msg.transform.rotation.y = qy
+        tf_msg.transform.rotation.z = qz
+        tf_msg.transform.rotation.w = qw
+        self.tf_broadcaster.sendTransform(tf_msg)
+
+        # --- nav_msgs/Odometry ---
+        odom = Odometry()
+        odom.header.stamp    = now
+        odom.header.frame_id = self.odom_frame
+        odom.child_frame_id  = self.base_frame
+        odom.pose.pose.position.x    = self.x
+        odom.pose.pose.position.y    = self.y
+        odom.pose.pose.position.z    = 0.0
+        odom.pose.pose.orientation.x = qx
+        odom.pose.pose.orientation.y = qy
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
+        odom.twist.twist.linear.x    = vx
+        odom.twist.twist.linear.y    = vy
+        odom.twist.twist.angular.z   = wz
+        self.odom_pub.publish(odom)
 
 
     def run(self):
@@ -314,6 +612,12 @@ class MecanumNode(object):
         """
 
         rospy.loginfo("Starting motor drive")
+        self.encoder_thread = threading.Thread(target=self.encoder_read_loop)
+        self.encoder_thread.daemon = True
+        self.encoder_thread.start()
+        self.pwm_thread = threading.Thread(target=self.pwm_send_loop)
+        self.pwm_thread.daemon = True
+        self.pwm_thread.start()
 
         r_time = rospy.Rate(60)
 
@@ -321,98 +625,61 @@ class MecanumNode(object):
 
             self.t_prev = self.t_n
             self.t_n = rospy.Time.now()
+            # inicio = time.time()
 
-            #try:
-            self.get_encoder_speed()
-            self.get_encoder_value()
-            self.update_wheel_speed()
-            self.get_pwm_output_pid()
-            self.send_pwm_cmd(self.PID_mode)
-            self._pub_wheel_speed()
-            self._pub_encoder_value()
-            self._pub_pwm()
-            r_time.sleep()
-            # except Exception as e:
-            #     if rospy.is_shutdown():
-            #         rospy.logwarn("Exception caught while shutting down")
-            #         rospy.logwarn(str(e))
-            #         self.__emergency_stop()
-            #
-            #     else:
-            #         rospy.logerr("Unhandled exception %s" % type(e))
-            #         rospy.logerr(e.args)
-            #         rospy.logerr(e.message)
-            #         raise e
-
-    def _pub_encoder_value(self):
-        """Publica el valor (raw) de los encoders"""
-
-        msg = EncTimed()
-        msg.header.frame_id = self.frame_id
-        msg.header.stamp = self.t_n
-        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = self.enc_n
-        self.enc_pub.publish(msg)
-
-    def _pub_wheel_speed(self):
-        r"""Publica la velocidad angular de las ruedas [rad/s], aplicando el
-        estándar de signo.
-        """
-
-        msg = WheelSpeed()
-        msg.header.stamp = self.t_n
-        msg.header.frame_id = self.frame_id
-        msg.phi = self._w_sign * self.phi_prime
-        self.phi_pub.publish(msg)
-
-    def _pub_pwm(self):
-        r"""Publica la acción de los motores (valor PWM raw)."""
-
-        msg = EncTimed()
-        msg.header.stamp = self.t_n
-        msg.header.frame_id = self.frame_id
-        msg.enc1, msg.enc2, msg.enc3, msg.enc4 = self.pwm_output
-        self.pwm_pub.publish(msg)
-
-
-
-    def __emergency_stop(self):
-        """Apagar los motores y publicar velocidad 0 en todas las ruedas.
-        """
-        self.front.ForwardM1(self.address, 0)
-        self.front.ForwardM2(self.address, 0)
-        self.back.ForwardM1(self.address, 0)
-        self.back.ForwardM2(self.address, 0)
-
-        msg = WheelSpeed()
-        msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = self.frame_id
-        msg.phi = np.array([0., 0., 0., 0.], dtype=np.float64)
-        self.phi_pub.publish(msg)
-        rospy.sleep(0.5)
+            try:
+                # t0 = time.time()
+                self.update_wheel_speed()
+                # t1 = time.time()
+                self.get_pwm_output_pid()
+                # t2 = time.time()
+                if self.PID_mode and (not self.emergency_stop_active):
+                    with self.pwm_lock:
+                        self.pwm_cmd[:] = np.int_(self.pwm_output)
+                    rospy.logdebug_throttle(2, "PWM commands: %s" % str(self.pwm_output))
+                # t3 = time.time()
+                self._pub_wheel_speed()
+                # t4 = time.time()
+                self._pub_encoder_value()
+                # t5 = time.time()
+                self._pub_pwm()
+                # t6 = time.time()
+                self.update_odom()
+                # t7 = time.time()
+                # fin = time.time()
+                # rospy.loginfo("Ciclo Completo: Inicio: %.9f, fin: %.9f, duracion: %.9f", inicio, fin, (fin - inicio))
+                # rospy.loginfo(
+                #     "Duraciones ciclo [s] | update_wheel_speed: %.6f | get_pwm_output_pid: %.6f | send_pwm_cmd: %.6f | pub_wheel_speed: %.6f | pub_encoder: %.6f | pub_pwm: %.6f | update_odom: %.6f",
+                #     (t1 - t0), (t2 - t1), (t3 - t2), (t4 - t3), (t5 - t4), (t6 - t5), (t7 - t6)
+                # )
+                r_time.sleep()
+            except Exception as e:
+                if rospy.is_shutdown():
+                    rospy.logwarn("Exception caught while shutting down")
+                    rospy.logwarn(str(e))
+                    self.__emergency_stop()
+                else:
+                    rospy.logerr("Unhandled exception %s" % type(e))
+                    rospy.logerr(e.args)
+                    rospy.logerr(e.message)
+                    traceback.print_exc()
 
     def shutdown(self):
-	"""Apaga el nodo"""
+        """Apaga el nodo"""
 
         rospy.loginfo("Shutting down")
 
         # No recibir mas comandos a los motores
-        if hasattr(self, "m1_pwm_sub"):
-            self.m1_pwm_sub.unregister()
-        if hasattr(self, "m2_pwm_sub"):
-            self.m2_pwm_sub.unregister()
-        if hasattr(self, "m3_pwm_sub"):
-            self.m3_pwm_sub.unregister()
-        if hasattr(self, "m4_pwm_sub"):
-            self.m4_pwm_sub.unregister()
+        for sub in getattr(self, "pwm_subs", []):
+            sub.unregister()
 
         if hasattr(self, "command_sub"):
             self.command_sub.unregister()
+        if hasattr(self, "imu_sub"):
+            self.imu_sub.unregister()
 
         self.pwm_output = np.zeros(4)
-        self.m1_pwm_cmd = 0
-        self.m2_pwm_cmd = 0
-        self.m3_pwm_cmd = 0
-        self.m4_pwm_cmd = 0
+        self.pwm_cmd = np.zeros(4)
 
 
 
