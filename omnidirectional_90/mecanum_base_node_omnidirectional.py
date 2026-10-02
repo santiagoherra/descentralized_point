@@ -67,8 +67,8 @@ def blend_angle_weighted(angle_a, angle_b, weight_a):
 # CLASE DE MECANUM_NODE
 
 class MecanumNode(object):
-    r"""Nodo para una base omnidireccional de 4 ruedas en cruz, con 2
-    controladores de motores Roboclaw (cada uno maneja 2 motores).
+    r"""Nodo para una base omnidireccional de 4 ruedas omni en cruz, con 2 controladores de motores Roboclaw (cada
+    uno maneja 2 motores).
 
     Convencion geometrica (ver resumen_robot_omnidireccional_4_ruedas_cruz.pdf)::
 
@@ -83,13 +83,27 @@ class MecanumNode(object):
 
     R1 = rueda en +X (frente), R2 = rueda en +Y (izquierda),
     R3 = rueda en -X (atras), R4 = rueda en -Y (derecha). Las cuatro estan a
-    distancia :attr:`L` del centro, con traccion tangencial (ruedas omni).
+    distancia :attr:`L` del centro (angulos alpha_i = 0, 90, 180, 270 grados,
+    parametro ``~wheel_angles``), con el eje de la rueda sobre el radio y la
+    traccion tangencial.
 
-    Cinematica directa (de velocidad de rueda a velocidad de chasis)::
+    Los rodillos de cada rueda estan inclinados un angulo gamma (``~roller_angle``,
+    90 grados por defecto = omni pura; 45 = tipo mecanum) respecto al eje de la rueda, con quiralidad
+    sigma_i = +-1 (``~roller_sign``). Con t_i = (-sin a_i, cos a_i) (tangente)
+    y n_i = (cos a_i, sin a_i) (radial), y la velocidad del punto de contacto
+    v_t = t_i.v + L*omega, v_n = n_i.v, la restriccion de no deslizamiento da::
 
-        vx    = (r/2)     * (w4 - w2)
-        vy    = (r/2)     * (w1 - w3)
-        omega = (r/(4*L)) * (w1 + w2 + w3 + w4)
+        r * w_i = v_t - sigma_i * cot(gamma) * v_n
+
+    Cinematica inversa: ``w = (1/r) * J @ [vx, vy, omega]`` con J de 4x3 y
+    filas ``[-sin a - s*cot(g)*cos a,  cos a - s*cot(g)*sin a,  L]``.
+    Cinematica directa (minimos cuadrados)::
+
+        [vx, vy, omega] = r * pinv(J) @ w
+
+    Con gamma = 90 grados (cot = 0, ruedas omni puras) se recupera el modelo
+    de ruedas omni en cruz: vx = (r/2)(w4-w2), vy = (r/2)(w1-w3),
+    omega = r/(4L) * sum(w).
 
     El mapeo fisico de cada rueda hacia (controlador, numero de motor) y el
     signo de giro de cada motor todavia no se conocen (cableado pendiente),
@@ -139,8 +153,19 @@ class MecanumNode(object):
         self.PWM_LIMIT = 100                               # Valor PWM limite de los motores
         self.odom_frame   = rospy.get_param("~odom_frame", "odom")  # Frame padre de odometria.
         self.base_frame   = rospy.get_param("~base_frame", "base_link")  # Frame hijo del robot.
-        self.wheel_radius = rospy.get_param("~wheel_radius", 0.0505)  # Radio efectivo de rueda r [m].
-        self.L = rospy.get_param("~wheel_center_distance", 0.160)  # Distancia L del centro del robot a cada rueda [m]. PLACEHOLDER: medir en el robot real.
+        self.wheel_radius = rospy.get_param("~wheel_radius", 0.048)  # Radio efectivo de rueda r [m].
+        self.L = rospy.get_param("~wheel_center_distance", 0.266)  # Distancia L del centro del robot a cada rueda [m]. PLACEHOLDER: medir en el robot real.
+        # Geometria de las ruedas, orden {R1, R2, R3, R4}.
+        wheel_angles = np.deg2rad(np.array(rospy.get_param("~wheel_angles", [0.0, 90.0, 180.0, 270.0]), dtype=np.float64))  # Posicion angular [deg] desde +X hacia +Y.
+        roller_angle = math.radians(rospy.get_param("~roller_angle", 90.0))  # Inclinacion de los rodillos respecto al eje de la rueda [deg]. 90 -> omni pura (modelo del PDF); 45 -> tipo mecanum.
+        roller_sign = np.array(rospy.get_param("~roller_sign", [1, 1, 1, 1]), dtype=np.float64)  # Quiralidad de los rodillos por rueda (+1/-1). PLACEHOLDER: verificar en el robot real.
+        k = roller_sign / math.tan(roller_angle)
+        # Matriz cinematica J (4x3): w = (1/r) * J @ [vx, vy, omega]
+        self.J = np.column_stack((
+            -np.sin(wheel_angles) - k * np.cos(wheel_angles),
+             np.cos(wheel_angles) - k * np.sin(wheel_angles),
+             self.L * np.ones(4)))
+        self.J_pinv = np.linalg.pinv(self.J)  # Cinematica directa: [vx, vy, omega] = r * J_pinv @ w
         self.imu_topic = rospy.get_param("~imu_topic", "/imu/data")  # Topic IMU usado para fusion.
         # Banderas explicitas por sensor y por variable:
         # - wz: velocidad angular Z
@@ -489,12 +514,8 @@ class MecanumNode(object):
     def update_odom(self):
         """Calcula y publica odometria holonomica (x, y, orientation) y TF odom->base_link.
 
-        Robot omnidireccional de 4 ruedas en cruz (R1=+X, R2=+Y, R3=-X, R4=-Y).
-        Cinematica directa (ver resumen_robot_omnidireccional_4_ruedas_cruz.pdf)::
-
-            vx    = (r/2)     * (w4 - w2)
-            vy    = (r/2)     * (w1 - w3)
-            omega = (r/(4*L)) * (w1 + w2 + w3 + w4)
+        Robot omnidireccional de 4 ruedas en cruz (ver docstring de la clase).
+        Cinematica directa: ``[vx, vy, omega] = r * pinv(J) @ w``.
         """
         now = rospy.Time.now()
         dt = (now - self.last_odom_time).to_sec()
@@ -502,16 +523,11 @@ class MecanumNode(object):
             return
         self.last_odom_time = now
 
-        r = self.wheel_radius
-        L = self.L
-
         # Velocidades angulares de las ruedas motrices [rad/s], orden {R1, R2, R3, R4}
         w1, w2, w3, w4 = self.phi_prime
 
         # Cinematica directa holonomica (chasis en su propio marco)
-        vx = (r / 2.0) * (w4 - w2)
-        vy = (r / 2.0) * (w1 - w3)
-        omega_wheels = (r / (4.0 * L)) * (w1 + w2 + w3 + w4)
+        vx, vy, omega_wheels = self.wheel_radius * (self.J_pinv @ self.phi_prime)
         wz = 0.0
 
         # FUSION DE wz (velocidad angular):
