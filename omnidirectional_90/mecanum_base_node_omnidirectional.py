@@ -83,27 +83,18 @@ class MecanumNode(object):
 
     R1 = rueda en +X (frente), R2 = rueda en +Y (izquierda),
     R3 = rueda en -X (atras), R4 = rueda en -Y (derecha). Las cuatro estan a
-    distancia :attr:`L` del centro (angulos alpha_i = 0, 90, 180, 270 grados,
-    parametro ``~wheel_angles``), con el eje de la rueda sobre el radio y la
-    traccion tangencial.
+    distancia :attr:`L` del centro (angulos fijos 0, 90, 180, 270 grados), con
+    el eje de la rueda sobre el radio y la traccion tangencial. Los rodillos
+    son siempre de 90 grados (omni pura).
 
-    Los rodillos de cada rueda estan inclinados un angulo gamma (``~roller_angle``,
-    90 grados por defecto = omni pura; 45 = tipo mecanum) respecto al eje de la rueda, con quiralidad
-    sigma_i = +-1 (``~roller_sign``). Con t_i = (-sin a_i, cos a_i) (tangente)
-    y n_i = (cos a_i, sin a_i) (radial), y la velocidad del punto de contacto
-    v_t = t_i.v + L*omega, v_n = n_i.v, la restriccion de no deslizamiento da::
-
-        r * w_i = v_t - sigma_i * cot(gamma) * v_n
-
-    Cinematica inversa: ``w = (1/r) * J @ [vx, vy, omega]`` con J de 4x3 y
-    filas ``[-sin a - s*cot(g)*cos a,  cos a - s*cot(g)*sin a,  L]``.
-    Cinematica directa (minimos cuadrados)::
+    El sentido positivo de giro de cada rueda (y de omega) es el horario.
+    Cinematica inversa: ``w = (1/r) * J @ [vx, vy, omega]`` con J (4x3) fija,
+    filas ``[sin a, -cos a, -L]``. Cinematica directa (minimos cuadrados)::
 
         [vx, vy, omega] = r * pinv(J) @ w
 
-    Con gamma = 90 grados (cot = 0, ruedas omni puras) se recupera el modelo
-    de ruedas omni en cruz: vx = (r/2)(w4-w2), vy = (r/2)(w1-w3),
-    omega = r/(4L) * sum(w).
+    que equivale a: vx = (r/2)(w2-w4), vy = (r/2)(w3-w1),
+    omega = -r/(4L) * sum(w).
 
     El mapeo fisico de cada rueda hacia (controlador, numero de motor) y el
     signo de giro de cada motor todavia no se conocen (cableado pendiente),
@@ -141,8 +132,8 @@ class MecanumNode(object):
 
         # Obtener parametros
         self.baudrate = rospy.get_param("~baudrate", default=115200)  # Baudrate serial Roboclaw.
-        self.port_ctrl_1 = rospy.get_param("~port_ctrl_1", default="/dev/ttyACM0")  # Puerto del primer controlador Roboclaw (bus USB propio).
-        self.port_ctrl_2 = rospy.get_param("~port_ctrl_2", default="/dev/ttyACM1")  # Puerto del segundo controlador Roboclaw (bus USB propio).
+        self.port_ctrl_1 = rospy.get_param("~port_ctrl_1", default="/dev/controladorM1M2")  # Puerto del primer controlador Roboclaw (bus USB propio).
+        self.port_ctrl_2 = rospy.get_param("~port_ctrl_2", default="/dev/controladorM3M4")  # Puerto del segundo controlador Roboclaw (bus USB propio).
         self.frame_id = rospy.get_param("~frame_id", default="mecanum_base")  # Frame para topics internos (encoders/wheel_speed/pwm).
         self.ppv = rospy.get_param("~ppv", default=3415) # Pulsos por vuelta del encoder. REVISAR DATO
         self.w_max = rospy.get_param("~w_max", default=12.35)  # Saturacion de referencia de velocidad de rueda [rad/s].
@@ -154,17 +145,14 @@ class MecanumNode(object):
         self.odom_frame   = rospy.get_param("~odom_frame", "odom")  # Frame padre de odometria.
         self.base_frame   = rospy.get_param("~base_frame", "base_link")  # Frame hijo del robot.
         self.wheel_radius = rospy.get_param("~wheel_radius", 0.048)  # Radio efectivo de rueda r [m].
-        self.L = rospy.get_param("~wheel_center_distance", 0.266)  # Distancia L del centro del robot a cada rueda [m]. PLACEHOLDER: medir en el robot real.
-        # Geometria de las ruedas, orden {R1, R2, R3, R4}.
-        wheel_angles = np.deg2rad(np.array(rospy.get_param("~wheel_angles", [0.0, 90.0, 180.0, 270.0]), dtype=np.float64))  # Posicion angular [deg] desde +X hacia +Y.
-        roller_angle = math.radians(rospy.get_param("~roller_angle", 90.0))  # Inclinacion de los rodillos respecto al eje de la rueda [deg]. 90 -> omni pura (modelo del PDF); 45 -> tipo mecanum.
-        roller_sign = np.array(rospy.get_param("~roller_sign", [1, 1, 1, 1]), dtype=np.float64)  # Quiralidad de los rodillos por rueda (+1/-1). PLACEHOLDER: verificar en el robot real.
-        k = roller_sign / math.tan(roller_angle)
-        # Matriz cinematica J (4x3): w = (1/r) * J @ [vx, vy, omega]
-        self.J = np.column_stack((
-            -np.sin(wheel_angles) - k * np.cos(wheel_angles),
-             np.cos(wheel_angles) - k * np.sin(wheel_angles),
-             self.L * np.ones(4)))
+        self.L = rospy.get_param("~wheel_center_distance", 0.266)  # Distancia L del centro del robot a cada rueda [m].
+        # Matriz cinematica J (4x3): w = (1/r) * J @ [vx, vy, omega], orden {R1, R2, R3, R4}.
+        # Ruedas omni puras en 0, 90, 180 y 270 grados; sentido positivo de giro = horario.
+        self.J = np.array([
+            [ 0.0, -1.0, -self.L],
+            [ 1.0,  0.0, -self.L],
+            [ 0.0,  1.0, -self.L],
+            [-1.0,  0.0, -self.L]], dtype=np.float64)
         self.J_pinv = np.linalg.pinv(self.J)  # Cinematica directa: [vx, vy, omega] = r * J_pinv @ w
         self.imu_topic = rospy.get_param("~imu_topic", "/imu/data")  # Topic IMU usado para fusion.
         # Banderas explicitas por sensor y por variable:
@@ -180,7 +168,7 @@ class MecanumNode(object):
         # PLACEHOLDER: mapeo fisico rueda -> (controlador, motor, signo). Cableado aun no definido,
         # ajustar estos parametros (por ejemplo desde el .launch) cuando se conecte el robot real.
         # Orden fijo {R1, R2, R3, R4}.
-        self.wheel_controller = np.array(rospy.get_param("~wheel_controller", [1, 1, 2, 2]), dtype=np.int32)  # 1 -> port_ctrl_1, 2 -> port_ctrl_2
+        self.wheel_controller = np.array(rospy.get_param("~wheel_controller", [1, 1, 2, 2]), dtype=np.int32)  # 1 -> port_ctrl_1, 2 -> port_ctrl_2 
         self.wheel_motor = np.array(rospy.get_param("~wheel_motor", [1, 2, 1, 2]), dtype=np.int32)  # 1 -> M1, 2 -> M2 del controlador asignado
         self._w_sign = np.array(rospy.get_param("~wheel_sign", [1, 1, 1, 1]), dtype=np.float64)  # signo de giro por rueda, segun direccion real del motor
 
@@ -204,8 +192,6 @@ class MecanumNode(object):
         rospy.loginfo("Connected to Roboclaw #2 on port %s", self.port_ctrl_2)
 
         self.controllers = [self.ctrl_1, self.ctrl_2]
-
-        rospy.on_shutdown(self.shutdown)
 
         for controller in self.controllers:
             try:
@@ -272,6 +258,9 @@ class MecanumNode(object):
         # Comandos para el robot
         self.command_sub = rospy.Subscriber("cmd_wheels", numpy_msg(WheelSpeed), self.cmd_wheel_callback, queue_size=1)
         self.imu_sub = rospy.Subscriber(self.imu_topic, Imu, self.imu_callback, queue_size=1)
+
+        # Registrar al final: shutdown() usa atributos (pwm_lock, phi_pub...) que deben existir ya.
+        rospy.on_shutdown(self.shutdown)
 
     def _log_sensor_configuration(self):
         """Reporta fuentes activas para wz/orientation y alerta configuraciones invalidas."""
@@ -527,7 +516,7 @@ class MecanumNode(object):
         w1, w2, w3, w4 = self.phi_prime
 
         # Cinematica directa holonomica (chasis en su propio marco)
-        vx, vy, omega_wheels = self.wheel_radius * (self.J_pinv @ self.phi_prime)
+        vx, vy, omega_wheels = self.wheel_radius * np.dot(self.J_pinv, self.phi_prime)
         wz = 0.0
 
         # FUSION DE wz (velocidad angular):
